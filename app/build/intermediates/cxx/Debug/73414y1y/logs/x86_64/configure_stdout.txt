@@ -1,0 +1,12 @@
+-- Setting GGML_NATIVE_DEFAULT to OFF
+-- Warning: ccache not found - consider installing it for faster compilation or disable this warning with GGML_CCACHE=OFF
+-- CMAKE_SYSTEM_PROCESSOR: x86_64
+-- GGML_SYSTEM_ARCH: x86
+-- Including CPU backend
+-- x86 detected
+-- Adding CPU backend variant ggml-cpu:  
+-- ggml version: 0.9.11
+-- ggml commit:  9e5647aff
+-- Configuring done
+-- Generating done
+-- Build files have been written to: C:/Users/Rhear/PrivateLLM/app/.cxx/Debug/73414y1y/x86_64
