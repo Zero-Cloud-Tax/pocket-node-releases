@@ -10,7 +10,7 @@ class LlamaInference {
 
     companion object {
         init {
-            System.loadLibrary("privatellm")
+            System.loadLibrary("pocketnode")
         }
     }
 
