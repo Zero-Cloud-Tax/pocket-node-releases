@@ -1,4 +1,4 @@
-# Private LLM for Android
+# Pocket Node for Android
 
 A fully offline, privacy-first AI chat app for Android. Runs large language models **entirely on-device** using [llama.cpp](https://github.com/ggerganov/llama.cpp) — no data ever leaves your phone.
 
@@ -33,7 +33,7 @@ A fully offline, privacy-first AI chat app for Android. Runs large language mode
 │  ┌─────────────────────────────────────────┐│
 │  │     LlamaInference (Kotlin/JNI)        ││
 │  │  ┌──────────────────────────────────┐   ││
-│  │  │  privatellm_jni.cpp (C++ NDK)   │   ││
+│  │  │  pocketnode_jni.cpp (C++ NDK)   │   ││
 │  │  │  ┌────────────────────────────┐  │   ││
 │  │  │  │      llama.cpp library     │  │   ││
 │  │  │  └────────────────────────────┘  │   ││
@@ -55,7 +55,7 @@ A fully offline, privacy-first AI chat app for Android. Runs large language mode
 ### 1. Clone and Open
 
 ```bash
-cd ~/PrivateLLM
+cd "Pocket Node"
 ```
 
 Open this folder in Android Studio.
@@ -102,7 +102,7 @@ Download from [HuggingFace](https://huggingface.co/models?sort=trending&search=g
 
 ```
 app/src/main/
-├── java/com/privatellm/app/
+├── java/com/pocketnode/app/
 │   ├── MainActivity.kt           # Entry point + navigation
 │   ├── MainApplication.kt        # Application class
 │   ├── inference/
@@ -128,7 +128,7 @@ app/src/main/
 │       └── navigation/            # Bottom nav routing
 └── cpp/
     ├── CMakeLists.txt             # Builds llama.cpp + JNI bridge
-    └── privatellm_jni.cpp         # C++ JNI implementation
+    └── pocketnode_jni.cpp         # C++ JNI implementation
 ```
 
 ## Performance Tips

@@ -8,7 +8,7 @@
 #include <vector>
 #include <unordered_map>
 
-#define TAG "PrivateLLM"
+#define TAG "PocketNode"
 
 // Inline helpers replacing common_batch_add / common_batch_clear
 static void batch_add(llama_batch &batch, llama_token id, llama_pos pos,

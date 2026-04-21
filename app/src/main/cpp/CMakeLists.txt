@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("privatellm" CXX C)
+project("pocketnode" CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -35,15 +35,15 @@ FetchContent_MakeAvailable(llama_cpp)
 # ============================================================
 # JNI bridge library
 # ============================================================
-add_library(privatellm SHARED
-    privatellm_jni.cpp
+add_library(pocketnode SHARED
+    pocketnode_jni.cpp
 )
 
-target_include_directories(privatellm PRIVATE
+target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/include
 )
 
-target_link_libraries(privatellm
+target_link_libraries(pocketnode
     llama
     log
     android
