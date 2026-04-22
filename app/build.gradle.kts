@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
     id("com.google.devtools.ksp")
 }
 
@@ -27,7 +28,7 @@ android {
 
     defaultConfig {
         applicationId = "com.pocketnode.app"
-        minSdk = 26
+        minSdk = 28
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
@@ -106,4 +107,13 @@ dependencies {
 
     // Markdown Parsing
     implementation("io.noties.markwon:core:4.6.2")
+
+    // Ktor embedded server for Edge API (CIO engine — no native deps, Android-safe)
+    val ktorVersion = "3.0.3"
+    implementation("io.ktor:ktor-server-cio:$ktorVersion")
+    implementation("io.ktor:ktor-server-content-negotiation:$ktorVersion")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+
+    // Serialization
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }

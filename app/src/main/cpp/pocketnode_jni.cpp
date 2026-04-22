@@ -2,13 +2,17 @@
 #include <android/log.h>
 #include <string>
 #include <atomic>
+#include <mutex>
 #include <thread>
+#include <unistd.h>
 
 #include "llama.h"
 #include <vector>
 #include <unordered_map>
 
 #define TAG "PocketNode"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // Inline helpers replacing common_batch_add / common_batch_clear
 static void batch_add(llama_batch &batch, llama_token id, llama_pos pos,
@@ -26,16 +30,45 @@ static void batch_add(llama_batch &batch, llama_token id, llama_pos pos,
 static void batch_clear(llama_batch &batch) {
     batch.n_tokens = 0;
 }
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Global stop flag per context (simplified — one active generation at a time)
+// Global stop flag per context (one active generation at a time)
 static std::atomic<bool> g_stop_generation{false};
 
-// Track n_past per context manually because llama_get_kv_cache_token_count is absent
+// Mutex protecting inference state — prevents concurrent nativeGenerate calls
+// from the UI and the Edge API service.
+static std::mutex g_inference_mutex;
+
+// Thread-local last error string, readable via nativeGetLastError()
+static thread_local std::string g_last_error;
+
+// Track n_past per context
 static std::unordered_map<llama_context*, int> g_n_past;
 
 extern "C" {
+
+// =========================================================================
+// Error reporting
+// =========================================================================
+
+JNIEXPORT jstring JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeGetLastError(
+        JNIEnv *env, jobject /* this */) {
+    return env->NewStringUTF(g_last_error.c_str());
+}
+
+// =========================================================================
+// Backend query
+// =========================================================================
+
+JNIEXPORT jstring JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeGetBackendName(
+        JNIEnv *env, jobject /* this */) {
+#ifdef GGML_VULKAN
+    return env->NewStringUTF("Vulkan");
+#else
+    return env->NewStringUTF("CPU");
+#endif
+}
 
 // =========================================================================
 // Model loading / unloading
@@ -52,14 +85,16 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
 
-    llama_model *model = llama_model_load_from_file(path, model_params);
+    llama_model *model = llama_load_model_from_file(path, model_params);
     env->ReleaseStringUTFChars(model_path, path);
 
     if (!model) {
-        LOGE("Failed to load model");
+        g_last_error = "Failed to load model from file. Check that the path exists and the file is a valid GGUF.";
+        LOGE("%s", g_last_error.c_str());
         return 0;
     }
 
+    g_last_error.clear();
     LOGI("Model loaded successfully");
     return reinterpret_cast<jlong>(model);
 }
@@ -68,7 +103,7 @@ JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeModel(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     if (model_ptr != 0) {
-        llama_model_free(reinterpret_cast<llama_model *>(model_ptr));
+        llama_free_model(reinterpret_cast<llama_model *>(model_ptr));
         LOGI("Model freed");
     }
 }
@@ -88,14 +123,19 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateContext(
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
 
-    llama_context *ctx = llama_init_from_model(model, ctx_params);
+    llama_context *ctx = llama_new_context_with_model(model, ctx_params);
     if (!ctx) {
-        LOGE("Failed to create context");
+        g_last_error = "Failed to create inference context. The model may require more memory than available.";
+        LOGE("%s", g_last_error.c_str());
         return 0;
     }
-    
-    g_n_past[ctx] = 0;
-    
+
+    {
+        std::lock_guard<std::mutex> lock(g_inference_mutex);
+        g_n_past[ctx] = 0;
+    }
+
+    g_last_error.clear();
     LOGI("Context created (ctx_size=%d, threads=%d)", context_size, n_threads);
     return reinterpret_cast<jlong>(ctx);
 }
@@ -105,7 +145,10 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeFreeContext(
         JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
     if (ctx_ptr != 0) {
         llama_context* ctx = reinterpret_cast<llama_context *>(ctx_ptr);
-        g_n_past.erase(ctx);
+        {
+            std::lock_guard<std::mutex> lock(g_inference_mutex);
+            g_n_past.erase(ctx);
+        }
         llama_free(ctx);
         LOGI("Context freed");
     }
@@ -113,6 +156,8 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeFreeContext(
 
 // =========================================================================
 // Text generation (streaming via Kotlin callback)
+// Mutex ensures only one inference runs at a time — safe for concurrent
+// calls from both the chat UI and the Edge API service.
 // =========================================================================
 
 JNIEXPORT void JNICALL
@@ -123,9 +168,10 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         jint top_k, jfloat repeat_penalty,
         jobject callback) {
 
+    std::lock_guard<std::mutex> lock(g_inference_mutex);
+
     llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
     const llama_model *model = llama_get_model(ctx);
-    const llama_vocab *vocab = llama_model_get_vocab(model);
 
     const char *prompt_cstr = env->GetStringUTFChars(j_prompt, nullptr);
     std::string prompt(prompt_cstr);
@@ -136,7 +182,8 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     jmethodID invokeMethod = env->GetMethodID(callbackClass, "onToken",
                                                "(Ljava/lang/String;)V");
     if (!invokeMethod) {
-        LOGE("Cannot find callback invoke method");
+        g_last_error = "Cannot find callback onToken method";
+        LOGE("%s", g_last_error.c_str());
         return;
     }
 
@@ -145,13 +192,12 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Tokenize the prompt
     const int n_prompt_max = prompt.size() + 256;
     std::vector<llama_token> tokens(n_prompt_max);
-    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+    int n_tokens = llama_tokenize(model, prompt.c_str(), prompt.size(),
                                    tokens.data(), n_prompt_max, true, true);
     if (n_tokens < 0) {
-        // Fallback if buffer is too small
         n_tokens = -n_tokens;
         tokens.resize(n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+        n_tokens = llama_tokenize(model, prompt.c_str(), prompt.size(),
                                    tokens.data(), n_tokens, true, true);
     } else {
         tokens.resize(n_tokens);
@@ -160,10 +206,13 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     LOGI("Prompt tokens: %d, generating up to %d tokens", n_tokens, max_tokens);
 
     int n_past = g_n_past[ctx];
-    
+
     if (n_past + n_tokens > llama_n_ctx(ctx)) {
-        LOGE("Context limit exceeded. Please clear context beforehand.");
-        return;
+        // Context full — clear KV cache and restart
+        llama_kv_cache_clear(ctx);
+        g_n_past[ctx] = 0;
+        n_past = 0;
+        LOGI("Context limit reached — KV cache cleared");
     }
 
     // Process prompt in a single batch
@@ -174,7 +223,8 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     batch.logits[batch.n_tokens - 1] = true;
 
     if (llama_decode(ctx, batch) != 0) {
-        LOGE("Decode failed for prompt");
+        g_last_error = "Decode failed during prompt processing";
+        LOGE("%s", g_last_error.c_str());
         llama_batch_free(batch);
         return;
     }
@@ -190,32 +240,29 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
     while (n_decode < max_tokens && !g_stop_generation.load()) {
-        // Check for end of generation
-        if (llama_vocab_is_eog(vocab, new_token_id)) {
+        if (llama_token_is_eog(model, new_token_id)) {
             break;
         }
 
-        // Convert token to text
         char buf[256];
-        int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
+        int n = llama_token_to_piece(model, new_token_id, buf, sizeof(buf), 0, true);
         if (n > 0) {
             std::string token_text(buf, n);
             jstring j_token = env->NewStringUTF(token_text.c_str());
             env->CallVoidMethod(callback, invokeMethod, j_token);
             env->DeleteLocalRef(j_token);
 
-            // Check for exceptions from callback (e.g. cancellation)
             if (env->ExceptionCheck()) {
                 env->ExceptionClear();
                 break;
             }
         }
 
-        // Prepare next batch
         batch_clear(batch);
         batch_add(batch, new_token_id, n_past + n_tokens + n_decode, {0}, true);
 
         if (llama_decode(ctx, batch) != 0) {
+            g_last_error = "Decode failed during generation";
             LOGE("Decode failed at token %d", n_decode);
             break;
         }
@@ -227,6 +274,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     LOGI("Generated %d tokens", n_decode);
 
     g_n_past[ctx] = n_past + n_tokens + n_decode;
+    g_last_error.clear();
 
     llama_sampler_free(smpl);
     llama_batch_free(batch);
@@ -249,16 +297,18 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeClearCache(
     if (ctx_ptr == 0) return;
     llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
     llama_kv_cache_clear(ctx);
-    g_n_past[ctx] = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_inference_mutex);
+        g_n_past[ctx] = 0;
+    }
     LOGI("KV cache cleared");
 }
 
 JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetTokenCount(
         JNIEnv *env, jobject /* this */, jlong model_ptr, jstring j_text) {
-    
+
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    const llama_vocab *vocab = llama_model_get_vocab(model);
 
     const char *text_cstr = env->GetStringUTFChars(j_text, nullptr);
     std::string text(text_cstr);
@@ -266,9 +316,9 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetTokenCount(
 
     int n_prompt_max = text.size() + 256;
     std::vector<llama_token> tokens(n_prompt_max);
-    int n_tokens = llama_tokenize(vocab, text.c_str(), text.size(),
+    int n_tokens = llama_tokenize(model, text.c_str(), text.size(),
                                    tokens.data(), n_prompt_max, true, true);
-    
+
     if (n_tokens < 0) {
         return -n_tokens;
     }
@@ -283,21 +333,31 @@ JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetContextLength(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_model_n_ctx_train(model));
+    return static_cast<jint>(llama_n_ctx_train(model));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetEmbeddingSize(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_model_n_embd(model));
+    return static_cast<jint>(llama_n_embd(model));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetVocabSize(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_vocab_n_tokens(llama_model_get_vocab(model)));
+    return static_cast<jint>(llama_n_vocab(model));
+}
+
+// =========================================================================
+// File descriptor cleanup (for content:// URI models opened via /proc/self/fd)
+// =========================================================================
+
+JNIEXPORT void JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeCloseFd(
+        JNIEnv * /* env */, jobject /* this */, jint fd) {
+    if (fd >= 0) ::close(fd);
 }
 
 } // extern "C"

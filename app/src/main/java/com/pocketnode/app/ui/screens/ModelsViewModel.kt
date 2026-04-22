@@ -2,6 +2,7 @@ package com.pocketnode.app.ui.screens
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import androidx.documentfile.provider.DocumentFile
@@ -19,7 +20,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileOutputStream
 import java.util.UUID
 
 sealed class DownloadState {
@@ -111,17 +111,14 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
     }
 
     private suspend fun importFromPath(context: Context, sourceFile: File, modelName: String) {
-        val destFile = File(context.filesDir, "model_${UUID.randomUUID()}.gguf")
-        sourceFile.copyTo(destFile, overwrite = true)
         modelManager.addModel(
             LocalModel(
                 id = UUID.randomUUID().toString(),
                 name = modelName,
-                path = destFile.absolutePath,
+                path = sourceFile.absolutePath,
                 contextLength = 2048
             )
         )
-        sourceFile.delete()
     }
 
     private fun setDownloadState(modelName: String, state: DownloadState) {
@@ -134,21 +131,19 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
 
     fun importModel(context: Context, uri: Uri) {
         viewModelScope.launch {
-            val documentName = DocumentFile.fromSingleUri(context, uri)?.name ?: "model_${UUID.randomUUID()}.gguf"
-            val safeName = if (documentName.endsWith(".gguf", ignoreCase = true)) documentName else "$documentName.gguf"
-            val destFile = File(context.filesDir, "model_${UUID.randomUUID()}.gguf")
-
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-
+            // Take persistable read permission so the URI survives app restarts
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            val documentName = DocumentFile.fromSingleUri(context, uri)?.name
+                ?: "model_${UUID.randomUUID()}.gguf"
+            val safeName = if (documentName.endsWith(".gguf", ignoreCase = true))
+                documentName else "$documentName.gguf"
             modelManager.addModel(
                 LocalModel(
                     id = UUID.randomUUID().toString(),
                     name = safeName.removeSuffix(".gguf"),
-                    path = destFile.absolutePath,
+                    path = uri.toString(),
                     contextLength = 2048
                 )
             )

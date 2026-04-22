@@ -5,190 +5,195 @@
 5    android:versionName="1.0.0" >
 6
 7    <uses-sdk
-8        android:minSdkVersion="26"
+8        android:minSdkVersion="28"
 9        android:targetSdkVersion="35" />
 10
-11    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-11-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:5:5-77
-11-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:5:22-74
-12    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-12-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:6:5-89
-12-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:6:22-86
-13    <!-- Notification permission for Android 13+ -->
-14    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-14-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:8:5-77
-14-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:8:22-74
-15
-16    <permission
-16-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:22:5-24:47
-17        android:name="com.pocketnode.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-17-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:23:9-81
-18        android:protectionLevel="signature" />
-18-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:5:5-67
+11-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:5:22-64
+12    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+12-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:6:5-79
+12-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:6:22-76
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+13-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:7:5-77
+13-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:7:22-74
+14    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+14-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:8:5-87
+14-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:8:22-84
+15    <uses-permission android:name="android.permission.WAKE_LOCK" />
+15-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:9:5-68
+15-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:9:22-65
+16    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+16-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:10:5-95
+16-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:10:22-92
+17    <!-- Notification permission for Android 13+ -->
+18    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+18-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:12:5-77
+18-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:12:22-74
 19
-20    <uses-permission android:name="com.pocketnode.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
-20-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
-20-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
-21
-22    <application
-22-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:10:5-49:19
-23        android:name="com.pocketnode.app.MainApplication"
-23-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:11:9-40
-24        android:allowBackup="false"
-24-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:12:9-36
-25        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
-25-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\00289a96ac475de587e0b84cc4d934b9\transformed\core-1.15.0\AndroidManifest.xml:28:18-86
-26        android:debuggable="true"
-27        android:extractNativeLibs="false"
-28        android:icon="@mipmap/ic_launcher"
-28-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:13:9-43
-29        android:label="@string/app_name"
-29-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:14:9-41
-30        android:largeHeap="true"
-30-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:18:9-33
-31        android:networkSecurityConfig="@xml/network_security_config"
-31-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:19:9-69
-32        android:roundIcon="@mipmap/ic_launcher_round"
-32-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:15:9-54
-33        android:supportsRtl="true"
-33-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:16:9-35
-34        android:theme="@style/Theme.PocketNode" >
-34-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:17:9-48
-35        <activity
-35-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:21:9-30:20
-36            android:name="com.pocketnode.app.MainActivity"
-36-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:22:13-41
-37            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
-37-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:24:13-87
-38            android:exported="true"
-38-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:23:13-36
-39            android:theme="@style/Theme.PocketNode" >
-39-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:25:13-52
-40            <intent-filter>
-40-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:26:13-29:29
-41                <action android:name="android.intent.action.MAIN" />
-41-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:27:17-69
-41-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:27:25-66
-42
-43                <category android:name="android.intent.category.LAUNCHER" />
-43-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:28:17-77
-43-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:28:27-74
-44            </intent-filter>
-45        </activity>
+20    <permission
+20-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:22:5-24:47
+21        android:name="com.pocketnode.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+21-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:23:9-81
+22        android:protectionLevel="signature" />
+22-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
+23
+24    <uses-permission android:name="com.pocketnode.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+24-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
+24-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
+25
+26    <application
+26-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:14:5-51:19
+27        android:name="com.pocketnode.app.MainApplication"
+27-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:15:9-40
+28        android:allowBackup="false"
+28-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:16:9-36
+29        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+29-->[androidx.core:core:1.15.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\2a13c573e614337da9903899c2324535\transformed\core-1.15.0\AndroidManifest.xml:28:18-86
+30        android:debuggable="true"
+31        android:extractNativeLibs="false"
+32        android:icon="@mipmap/ic_launcher"
+32-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:17:9-43
+33        android:label="@string/app_name"
+33-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:18:9-41
+34        android:largeHeap="true"
+34-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:22:9-33
+35        android:networkSecurityConfig="@xml/network_security_config"
+35-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:23:9-69
+36        android:roundIcon="@mipmap/ic_launcher_round"
+36-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:19:9-54
+37        android:supportsRtl="true"
+37-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:20:9-35
+38        android:theme="@style/Theme.PocketNode" >
+38-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:21:9-48
+39        <activity
+39-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:25:9-34:20
+40            android:name="com.pocketnode.app.MainActivity"
+40-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:26:13-41
+41            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+41-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:28:13-87
+42            android:exported="true"
+42-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:27:13-36
+43            android:theme="@style/Theme.PocketNode" >
+43-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:29:13-52
+44            <intent-filter>
+44-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:30:13-33:29
+45                <action android:name="android.intent.action.MAIN" />
+45-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:31:17-69
+45-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:31:25-66
 46
-47        <provider
-48            android:name="androidx.core.content.FileProvider"
-48-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:33:13-62
-49            android:authorities="com.pocketnode.app.fileprovider"
-49-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:34:13-64
-50            android:exported="false"
-50-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:35:13-37
-51            android:grantUriPermissions="true" >
-51-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:36:13-47
-52            <meta-data
-52-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:37:13-39:54
-53                android:name="android.support.FILE_PROVIDER_PATHS"
-53-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:38:17-67
-54                android:resource="@xml/file_paths" />
-54-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:39:17-51
-55        </provider>
-56
-57        <!-- Generation Service for keeping inference alive in background -->
-58        <service
-58-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:43:9-48:19
-59            android:name="com.pocketnode.app.inference.GenerationService"
-59-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:44:13-56
-60            android:exported="false"
-60-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:46:13-37
-61            android:foregroundServiceType="specialUse" >
-61-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:45:13-55
-62            <property
-62-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:47:13-124
-63                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-63-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:47:23-82
-64                android:value="Offline LLM Generation" />
-64-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:47:83-121
-65        </service>
+47                <category android:name="android.intent.category.LAUNCHER" />
+47-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:32:17-77
+47-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:32:27-74
+48            </intent-filter>
+49        </activity>
+50
+51        <provider
+52            android:name="androidx.core.content.FileProvider"
+52-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:37:13-62
+53            android:authorities="com.pocketnode.app.fileprovider"
+53-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:38:13-64
+54            android:exported="false"
+54-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:39:13-37
+55            android:grantUriPermissions="true" >
+55-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:40:13-47
+56            <meta-data
+56-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:41:13-43:54
+57                android:name="android.support.FILE_PROVIDER_PATHS"
+57-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:42:17-67
+58                android:resource="@xml/file_paths" />
+58-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:43:17-51
+59        </provider>
+60
+61        <!-- Generation Service for keeping inference alive in background -->
+62        <service
+62-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:47:9-50:40
+63            android:name="com.pocketnode.app.inference.GenerationService"
+63-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:48:13-56
+64            android:exported="false"
+64-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:50:13-37
+65            android:foregroundServiceType="dataSync" />
+65-->C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml:49:13-53
 66
 67        <activity
-67-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\d00b91d9e0cb449a3b787b3de71b8e17\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
+67-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\8cbd2b017612cfa93460f25da8f0263a\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
 68            android:name="androidx.compose.ui.tooling.PreviewActivity"
-68-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\d00b91d9e0cb449a3b787b3de71b8e17\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
+68-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\8cbd2b017612cfa93460f25da8f0263a\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
 69            android:exported="true" />
-69-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\d00b91d9e0cb449a3b787b3de71b8e17\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
+69-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\Rhear\.gradle\caches\8.13\transforms\8cbd2b017612cfa93460f25da8f0263a\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
 70
 71        <provider
-71-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:24:9-32:20
+71-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:24:9-32:20
 72            android:name="androidx.startup.InitializationProvider"
-72-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:25:13-67
+72-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:25:13-67
 73            android:authorities="com.pocketnode.app.androidx-startup"
-73-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:26:13-68
+73-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:26:13-68
 74            android:exported="false" >
-74-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:27:13-37
+74-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:27:13-37
 75            <meta-data
-75-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:29:13-31:52
+75-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:29:13-31:52
 76                android:name="androidx.emoji2.text.EmojiCompatInitializer"
-76-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:30:17-75
+76-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:30:17-75
 77                android:value="androidx.startup" />
-77-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f9d4059acd75f4885b455cd9f1ea104\transformed\emoji2-1.3.0\AndroidManifest.xml:31:17-49
+77-->[androidx.emoji2:emoji2:1.3.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\98ebb098c9748bc24e8fdd542834d5c2\transformed\emoji2-1.3.0\AndroidManifest.xml:31:17-49
 78            <meta-data
-78-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\6ddfb86c7a51071de6d09580ffb8d4de\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:29:13-31:52
+78-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\ff91b84b0cbd8d654b55b5d282878666\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:29:13-31:52
 79                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-79-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\6ddfb86c7a51071de6d09580ffb8d4de\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:30:17-78
+79-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\ff91b84b0cbd8d654b55b5d282878666\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:30:17-78
 80                android:value="androidx.startup" />
-80-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\6ddfb86c7a51071de6d09580ffb8d4de\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:31:17-49
+80-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\Rhear\.gradle\caches\8.13\transforms\ff91b84b0cbd8d654b55b5d282878666\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:31:17-49
 81            <meta-data
-81-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:29:13-31:52
+81-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:29:13-31:52
 82                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
-82-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:30:17-85
+82-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:30:17-85
 83                android:value="androidx.startup" />
-83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:31:17-49
+83-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:31:17-49
 84        </provider>
 85
 86        <service
-86-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\c3bd516ca7677df6ab76a46943720e88\transformed\room-runtime-2.6.1\AndroidManifest.xml:24:9-28:63
+86-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\0d5a2cff7c931f9c96e3e28df497b1f9\transformed\room-runtime-2.6.1\AndroidManifest.xml:24:9-28:63
 87            android:name="androidx.room.MultiInstanceInvalidationService"
-87-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\c3bd516ca7677df6ab76a46943720e88\transformed\room-runtime-2.6.1\AndroidManifest.xml:25:13-74
+87-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\0d5a2cff7c931f9c96e3e28df497b1f9\transformed\room-runtime-2.6.1\AndroidManifest.xml:25:13-74
 88            android:directBootAware="true"
-88-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\c3bd516ca7677df6ab76a46943720e88\transformed\room-runtime-2.6.1\AndroidManifest.xml:26:13-43
+88-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\0d5a2cff7c931f9c96e3e28df497b1f9\transformed\room-runtime-2.6.1\AndroidManifest.xml:26:13-43
 89            android:exported="false" />
-89-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\c3bd516ca7677df6ab76a46943720e88\transformed\room-runtime-2.6.1\AndroidManifest.xml:27:13-37
+89-->[androidx.room:room-runtime:2.6.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\0d5a2cff7c931f9c96e3e28df497b1f9\transformed\room-runtime-2.6.1\AndroidManifest.xml:27:13-37
 90
 91        <receiver
-91-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:34:9-52:20
+91-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:34:9-52:20
 92            android:name="androidx.profileinstaller.ProfileInstallReceiver"
-92-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:35:13-76
+92-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:35:13-76
 93            android:directBootAware="false"
-93-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:36:13-44
+93-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:36:13-44
 94            android:enabled="true"
-94-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:37:13-35
+94-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:37:13-35
 95            android:exported="true"
-95-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:38:13-36
+95-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:38:13-36
 96            android:permission="android.permission.DUMP" >
-96-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:39:13-57
+96-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:39:13-57
 97            <intent-filter>
-97-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:40:13-42:29
+97-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:40:13-42:29
 98                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
-98-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:17-91
-98-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:25-88
+98-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:17-91
+98-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:41:25-88
 99            </intent-filter>
 100            <intent-filter>
-100-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:43:13-45:29
+100-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:43:13-45:29
 101                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
-101-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:17-85
-101-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:25-82
+101-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:17-85
+101-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:44:25-82
 102            </intent-filter>
 103            <intent-filter>
-103-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:46:13-48:29
+103-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:46:13-48:29
 104                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
-104-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:17-88
-104-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:25-85
+104-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:17-88
+104-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:47:25-85
 105            </intent-filter>
 106            <intent-filter>
-106-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:49:13-51:29
+106-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:49:13-51:29
 107                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
-107-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:17-95
-107-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\eb683d1229822575ed52f12d246764c6\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:25-92
+107-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:17-95
+107-->[androidx.profileinstaller:profileinstaller:1.3.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\8f933c6650f1c6cc0fb1f78033478261\transformed\profileinstaller-1.3.1\AndroidManifest.xml:50:25-92
 108            </intent-filter>
 109        </receiver>
 110    </application>
