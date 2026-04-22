@@ -377,10 +377,93 @@
     footer a { color: var(--muted); text-decoration: none; }
     footer a:hover { color: var(--text); }
 
+    /* ── Pricing ── */
+    .pricing-section {
+      padding: 80px 24px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+    }
+    .pricing-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 36px 28px 28px;
+      position: relative;
+    }
+    .pricing-card--pro {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent), 0 8px 40px rgba(99,102,241,0.18);
+    }
+    .pricing-badge-pro {
+      position: absolute;
+      top: -13px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      padding: 4px 14px;
+      border-radius: 100px;
+    }
+    .pricing-tier {
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent-light);
+      margin-bottom: 12px;
+    }
+    .pricing-price {
+      font-size: 2.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .pricing-period {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 28px;
+    }
+    .pricing-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pricing-features li {
+      font-size: 0.9rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .pricing-features .check {
+      color: var(--green);
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .pricing-total {
+      margin-top: 24px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+    .pricing-total strong { color: var(--text); }
+
     @media (max-width: 600px) {
       nav { padding: 14px 20px; }
       .hero { padding: 64px 20px 56px; }
       .features { padding: 56px 20px; }
+      .pricing-section { padding: 56px 20px; }
       footer { padding: 24px 20px; flex-direction: column; text-align: center; }
     }
   </style>
@@ -395,9 +478,9 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-eyebrow">Free Android App</div>
+  <div class="hero-eyebrow">Private AI — Android App</div>
   <h1>Run <span class="accent">AI privately</span> on your Android device</h1>
-  <p>No internet. No cloud. No data collected. Full LLM inference happens entirely on your phone.</p>
+  <p>No internet. No cloud. No data collected. Full LLM inference happens entirely on your phone. Free Lite tier — unlock everything for a one-time $19.99.</p>
   <div class="hero-actions">
     <a class="btn-primary" href="PocketNodeLite.apk" download>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -416,7 +499,7 @@
   <div class="badge"><span class="dot"></span> Zero Cloud</div>
   <div class="badge"><span class="dot"></span> No Data Collected</div>
   <div class="badge"><span class="dot"></span> Android 8.0+</div>
-  <div class="badge"><span class="dot"></span> Free Forever</div>
+  <div class="badge"><span class="dot"></span> Free Lite · $19.99 Pro</div>
 </div>
 
 <!-- Chat Preview -->
@@ -463,6 +546,43 @@
   </div>
 </section>
 
+<!-- Pricing -->
+<section class="pricing-section" id="pricing">
+  <div class="section-label">Pricing</div>
+  <h2 style="text-align:center;font-size:clamp(1.6rem,3vw,2.4rem);font-weight:800;letter-spacing:-0.02em;margin-bottom:12px;">Simple, honest pricing</h2>
+  <p style="text-align:center;color:var(--muted);margin-bottom:48px;max-width:440px;margin-left:auto;margin-right:auto;">Start free. Pay once. Own it forever.</p>
+  <div class="pricing-grid">
+    <div class="pricing-card">
+      <div class="pricing-tier">Lite</div>
+      <div class="pricing-price">$0</div>
+      <div class="pricing-period">Free forever</div>
+      <ul class="pricing-features">
+        <li><span class="check">✓</span> Basic model (1 GGUF)</li>
+        <li><span class="check">✓</span> 100% local &amp; offline</li>
+        <li><span class="check">✓</span> Private by design</li>
+        <li><span class="check">✓</span> No account required</li>
+      </ul>
+      <a class="btn-secondary" href="PocketNodeLite.apk" download style="width:100%;justify-content:center;margin-top:28px;">Download Lite</a>
+    </div>
+    <div class="pricing-card pricing-card--pro">
+      <div class="pricing-badge-pro">OWNED</div>
+      <div class="pricing-tier">Pro</div>
+      <div class="pricing-price">$19.99</div>
+      <div class="pricing-period">One-time · yours forever</div>
+      <ul class="pricing-features">
+        <li><span class="check">✓</span> Unlimited models</li>
+        <li><span class="check">✓</span> All Lite features</li>
+        <li><span class="check">✓</span> Advanced parameters</li>
+        <li><span class="check">✓</span> Priority support</li>
+        <li><span class="check">✓</span> All future Pro updates</li>
+      </ul>
+      <div class="pricing-total">Year 3 total: <strong>$19.99</strong></div>
+      <a class="btn-primary" href="#" style="width:100%;justify-content:center;margin-top:16px;">Get Pro — $19.99</a>
+    </div>
+  </div>
+  <p style="text-align:center;color:var(--muted);font-size:0.8rem;margin-top:32px;">Data privacy: 100% Local &nbsp;·&nbsp; Offline use: Sovereign &nbsp;·&nbsp; No subscriptions, ever.</p>
+</section>
+
 <!-- Features -->
 <section class="features" id="features">
   <div class="features-header">
@@ -506,7 +626,7 @@
 <!-- Download CTA -->
 <section class="download-section">
   <h2>Ready to run AI privately?</h2>
-  <p>Download Pocket Node free. No sign-up required. Just install and go.</p>
+  <p>Download the free Lite APK. No sign-up required. Upgrade to Pro anytime for a one-time $19.99.</p>
   <a class="btn-primary" href="PocketNodeLite.apk" download style="font-size:1.1rem; padding:16px 36px; display:inline-flex;">
     <svg style="width:20px;height:20px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -515,7 +635,8 @@
   </a>
   <div class="apk-meta">
     <span>📱 Android 8.0+</span>
-    <span>🆓 Free</span>
+    <span>🆓 Free Lite</span>
+    <span>⭐ Pro $19.99 once</span>
     <span>🔒 No permissions required to chat</span>
     <span>⚙️ Enable "Install unknown apps" in Settings</span>
   </div>
