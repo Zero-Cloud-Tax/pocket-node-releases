@@ -4,7 +4,7 @@
     "type": "APK",
     "kind": "Directory"
   },
-  "applicationId": "com.privatellm.app",
+  "applicationId": "com.pocketnode.app",
   "variantName": "debug",
   "elements": [
     {
@@ -17,5 +17,5 @@
     }
   ],
   "elementType": "File",
-  "minSdkVersionForDexing": 26
+  "minSdkVersionForDexing": 28
 }

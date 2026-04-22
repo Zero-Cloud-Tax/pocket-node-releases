@@ -1,0 +1,16 @@
+{
+  "name": "pocketnode-cli",
+  "version": "1.0.0",
+  "description": "CLI client for the Pocket Node Edge API",
+  "main": "index.js",
+  "bin": {
+    "pocketnode": "./index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,7 +1,5 @@
 package com.pocketnode.app.inference
 
-import android.content.Context
-
 interface LlamaCallback {
     fun onToken(token: String)
 }
@@ -34,4 +32,7 @@ class LlamaInference {
     external fun nativeGetContextLength(modelPtr: Long): Int
     external fun nativeGetEmbeddingSize(modelPtr: Long): Int
     external fun nativeGetVocabSize(modelPtr: Long): Int
+    external fun nativeGetLastError(): String
+    external fun nativeGetBackendName(): String
+    external fun nativeCloseFd(fd: Int)
 }

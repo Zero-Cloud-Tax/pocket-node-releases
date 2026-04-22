@@ -1,11 +1,8 @@
 package com.pocketnode.app.ui.screens
 
+import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -17,8 +14,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,39 +33,43 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import android.widget.TextView
 import com.pocketnode.app.data.model.ChatMessage
 import io.noties.markwon.Markwon
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
     currentAssistantMessage: String,
     isGenerating: Boolean,
+    isLoadingModel: Boolean,
+    isModelReady: Boolean,
+    modelName: String?,
+    modelError: String?,
+    backendName: String,
     onSendMessage: (String, Float, Float, Int) -> Unit,
-    onClearChat: () -> Unit
+    onClearChat: () -> Unit,
+    onStopGeneration: () -> Unit,
+    onDismissError: () -> Unit,
+    onNavigateToSettings: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
-    var showSettings by remember { mutableStateOf(false) }
-
-    var temp by remember { mutableStateOf(0.7f) }
-    var topP by remember { mutableStateOf(0.9f) }
-    var topK by remember { mutableStateOf(40) }
 
     val listState = rememberLazyListState()
+    val totalItems = messages.size + (if (isGenerating) 1 else 0)
 
-    LaunchedEffect(messages.size, currentAssistantMessage) {
-        if (messages.isNotEmpty() || currentAssistantMessage.isNotEmpty()) {
-            listState.animateScrollToItem(if (isGenerating) messages.size else if (messages.isEmpty()) 0 else messages.size - 1)
+    LaunchedEffect(totalItems, currentAssistantMessage) {
+        if (totalItems > 0) {
+            listState.animateScrollToItem(totalItems - 1)
         }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
+
+            // ── Header row ──
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -75,48 +78,79 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClearChat) {
-                    Icon(Icons.Default.Delete, contentDescription = "Clear Chat", tint = MaterialTheme.colorScheme.error)
+                    Icon(Icons.Default.Delete, contentDescription = "Clear Chat",
+                        tint = MaterialTheme.colorScheme.error)
                 }
 
-                Text(
-                    "Pocket Node",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-
-                IconButton(onClick = { showSettings = !showSettings }) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = if (showSettings) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        modelName ?: "Pocket Node",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onBackground
                     )
+                    // GPU/CPU indicator chip
+                    if (isModelReady) {
+                        Surface(
+                            shape = CircleShape,
+                            color = if (backendName == "Vulkan")
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(
+                                backendName,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (backendName == "Vulkan")
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                IconButton(onClick = onNavigateToSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            AnimatedVisibility(visible = showSettings) {
+            // ── Error banner ──
+            AnimatedVisibility(visible = modelError != null) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    tonalElevation = 4.dp
+                    color = MaterialTheme.colorScheme.errorContainer
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Temperature: ${String.format("%.1f", temp)}", style = MaterialTheme.typography.labelMedium)
-                        Slider(value = temp, onValueChange = { temp = it }, valueRange = 0.1f..2.0f)
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Top-P: ${String.format("%.2f", topP)}", style = MaterialTheme.typography.labelMedium)
-                        Slider(value = topP, onValueChange = { topP = it }, valueRange = 0.0f..1.0f)
-
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Top-K: $topK", style = MaterialTheme.typography.labelMedium)
-                        Slider(value = topK.toFloat(), onValueChange = { topK = it.toInt() }, valueRange = 1f..100f)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            modelError ?: "",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        IconButton(onClick = onDismissError, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(16.dp))
+                        }
                     }
                 }
             }
 
+            // ── Model loading indicator ──
+            if (isLoadingModel) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            // ── Messages ──
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
@@ -139,20 +173,21 @@ fun ChatScreen(
                     }
                 }
                 if (isGenerating && currentAssistantMessage.isEmpty()) {
-                    item {
-                        TypingIndicator()
-                    }
+                    item { TypingIndicator() }
                 }
             }
 
+            // ── Input bar ──
             ChatInputBar(
                 text = inputText,
                 onTextChange = { inputText = it },
                 onSend = {
-                    onSendMessage(inputText, temp, topP, topK)
+                    onSendMessage(inputText, 0.7f, 0.9f, 40)
                     inputText = ""
                 },
-                enabled = !isGenerating
+                isGenerating = isGenerating,
+                onStop = onStopGeneration,
+                enabled = isModelReady && !isLoadingModel
             )
         }
     }
@@ -184,31 +219,22 @@ fun ChatBubble(message: ChatMessage) {
         )
     }
 
-    val shape = if (isUser) {
+    val shape = if (isUser)
         RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
-    } else {
+    else
         RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp)
-    }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = alignment
-    ) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
         Row(verticalAlignment = Alignment.Bottom) {
             if (!isUser) {
-                // AI avatar circle
                 Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
+                    modifier = Modifier.size(28.dp).clip(CircleShape)
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        "AI",
+                    Text("AI",
                         style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 8.sp
+                            fontWeight = FontWeight.ExtraBold, fontSize = 8.sp
                         ),
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
@@ -223,9 +249,7 @@ fun ChatBubble(message: ChatMessage) {
                     .background(bubbleColor)
                     .combinedClickable(
                         onClick = {},
-                        onLongClick = {
-                            clipboardManager.setText(AnnotatedString(message.content))
-                        }
+                        onLongClick = { clipboardManager.setText(AnnotatedString(message.content)) }
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
@@ -250,8 +274,7 @@ fun ChatBubble(message: ChatMessage) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             modifier = Modifier.padding(
                 start = if (!isUser) 36.dp else 0.dp,
-                top = 3.dp,
-                bottom = 2.dp
+                top = 3.dp, bottom = 2.dp
             )
         )
     }
@@ -260,39 +283,25 @@ fun ChatBubble(message: ChatMessage) {
 @Composable
 fun TypingIndicator() {
     val infiniteTransition = rememberInfiniteTransition(label = "typing")
-
     val dot1Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(600, delayMillis = 0), RepeatMode.Reverse),
-        label = "dot1"
+        0.3f, 1f, infiniteRepeatable(tween(600, delayMillis = 0), RepeatMode.Reverse), "dot1"
     )
     val dot2Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(600, delayMillis = 200), RepeatMode.Reverse),
-        label = "dot2"
+        0.3f, 1f, infiniteRepeatable(tween(600, delayMillis = 200), RepeatMode.Reverse), "dot2"
     )
     val dot3Alpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(600, delayMillis = 400), RepeatMode.Reverse),
-        label = "dot3"
+        0.3f, 1f, infiniteRepeatable(tween(600, delayMillis = 400), RepeatMode.Reverse), "dot3"
     )
 
-    Row(
-        modifier = Modifier.padding(vertical = 4.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
+    Row(modifier = Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
         Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
+            modifier = Modifier.size(28.dp).clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                "AI",
+            Text("AI",
                 style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 8.sp
+                    fontWeight = FontWeight.ExtraBold, fontSize = 8.sp
                 ),
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
@@ -308,10 +317,7 @@ fun TypingIndicator() {
         ) {
             listOf(dot1Alpha, dot2Alpha, dot3Alpha).forEach { alpha ->
                 Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .alpha(alpha)
-                        .clip(CircleShape)
+                    modifier = Modifier.size(8.dp).alpha(alpha).clip(CircleShape)
                         .background(MaterialTheme.colorScheme.onSecondaryContainer)
                 )
             }
@@ -324,6 +330,8 @@ fun ChatInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    isGenerating: Boolean,
+    onStop: () -> Unit,
     enabled: Boolean
 ) {
     Surface(
@@ -332,17 +340,13 @@ fun ChatInputBar(
         tonalElevation = 8.dp
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(CircleShape),
+                modifier = Modifier.weight(1f).clip(CircleShape),
                 placeholder = { Text("Message Pocket Node...") },
                 colors = TextFieldDefaults.colors(
                     focusedIndicatorColor = Color.Transparent,
@@ -351,21 +355,33 @@ fun ChatInputBar(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
-                enabled = enabled,
+                enabled = enabled && !isGenerating,
                 maxLines = 4
             )
 
             Spacer(modifier = Modifier.width(12.dp))
 
             FloatingActionButton(
-                onClick = onSend,
+                onClick = if (isGenerating) onStop else onSend,
                 modifier = Modifier.size(48.dp),
-                containerColor = if (text.isNotBlank() && enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = if (text.isNotBlank() && enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                containerColor = when {
+                    isGenerating -> MaterialTheme.colorScheme.error
+                    text.isNotBlank() && enabled -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = when {
+                    isGenerating -> MaterialTheme.colorScheme.onError
+                    text.isNotBlank() && enabled -> MaterialTheme.colorScheme.onPrimary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
                 elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
                 shape = CircleShape
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                if (isGenerating) {
+                    Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(20.dp))
+                } else {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))
+                }
             }
         }
     }
@@ -388,9 +404,7 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier, color: Color) 
                 textSize = 16f
             }
         },
-        update = { textView ->
-            markwon.setMarkdown(textView, markdown)
-        },
+        update = { textView -> markwon.setMarkdown(textView, markdown) },
         modifier = modifier
     )
 }

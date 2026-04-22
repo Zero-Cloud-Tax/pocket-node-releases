@@ -26,9 +26,18 @@ set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-# Enable Vulkan Backend for Android GPU support
-# Disabled temporarily because vulkan-shaders-gen requires host-side glslc and ninja on Windows Native
-set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+# Enable mmap so models stream from storage instead of loading fully into RAM
+set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
+
+# Vulkan GPU backend — requires Vulkan SDK (with glslc) installed on the build host.
+set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
+set(Vulkan_GLSLC_EXECUTABLE "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
+set(_ggml_vk_genshaders_cmd "C:/Users/Rhear/Pocket Node/app/.cxx/Debug/4v3f5h6n/x86_64/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
+
+# Ensure Vulkan headers are found by all sub-projects (including llama.cpp)
+include_directories("C:/VulkanSDK/1.4.341.1/Include")
+
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(llama_cpp)
 
@@ -41,10 +50,18 @@ add_library(pocketnode SHARED
 
 target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/include
+    "C:/VulkanSDK/1.4.341.1/Include"
 )
+
+# Also ensure ggml-vulkan sees the Vulkan headers if needed
+include_directories("C:/VulkanSDK/1.4.341.1/Include")
 
 target_link_libraries(pocketnode
     llama
     log
     android
 )
+
+if(GGML_VULKAN)
+    target_link_libraries(pocketnode vulkan)
+endif()
