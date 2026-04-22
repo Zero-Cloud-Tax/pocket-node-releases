@@ -31,11 +31,11 @@ set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
 # Vulkan GPU backend — requires Vulkan SDK (with glslc) installed on the build host.
 set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
-set(Vulkan_GLSLC_EXECUTABLE "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
-set(_ggml_vk_genshaders_cmd "C:/Users/Rhear/Pocket Node/app/.cxx/Debug/4v3f5h6n/x86_64/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
+set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
+set(_ggml_vk_genshaders_cmd "${VULKAN_SDK}/Bin/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
 
 # Ensure Vulkan headers are found by all sub-projects (including llama.cpp)
-include_directories("C:/VulkanSDK/1.4.341.1/Include")
+include_directories("${VULKAN_SDK}/Include")
 
 set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
@@ -50,11 +50,11 @@ add_library(pocketnode SHARED
 
 target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/include
-    "C:/VulkanSDK/1.4.341.1/Include"
+    "${VULKAN_SDK}/Include"
 )
 
 # Also ensure ggml-vulkan sees the Vulkan headers if needed
-include_directories("C:/VulkanSDK/1.4.341.1/Include")
+include_directories("${VULKAN_SDK}/Include")
 
 target_link_libraries(pocketnode
     llama
