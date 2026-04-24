@@ -25,5 +25,17 @@ val RECOMMENDED_MODELS = listOf(
         "Very fast, good for simple logic.",
         "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
         "1.0 GB"
+    ),
+    RemoteModel(
+        "LLaVA 1.5 7B (Vision)",
+        "Vision model. Understands images when you attach them.",
+        "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf",
+        "4.0 GB"
+    ),
+    RemoteModel(
+        "LLaVA 1.5 Projector",
+        "Required companion for LLaVA. Download this to process images.",
+        "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf",
+        "600 MB"
     )
 )

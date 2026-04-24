@@ -7,6 +7,7 @@ A fully offline, privacy-first AI chat app for Android. Runs large language mode
 - **100% Offline** — No internet permission, no telemetry, no cloud. Period.
 - **GGUF Model Support** — Import any GGUF-format model via the file picker
 - **Document Indexing (RAG)** — Attach PDFs and text files directly in chat to ask questions about them
+- **Multi-Modal Vision** — Attach images and use LLaVA models to describe or analyze visual content natively on-device
 - **Streaming Responses** — Token-by-token output as the model generates
 - **Conversation History** — Stored locally with Room database
 - **Multiple Chat Templates** — ChatML, Llama 3, Alpaca, and plain text

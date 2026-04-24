@@ -151,9 +151,10 @@ class MainActivity : ComponentActivity() {
                                     modelName = chatVm.modelName.value,
                                     modelError = chatVm.modelError.value,
                                     backendName = chatVm.backendName.value,
-                                    onSendMessage = { text, _, _, _ ->
+                                    onSendMessage = { text, imageBytes, _, _, _ ->
                                         chatVm.sendMessage(
                                             text = text,
+                                            imageBytes = imageBytes,
                                             conversationId = 1L,
                                             temp = temperature,
                                             topP = topP,

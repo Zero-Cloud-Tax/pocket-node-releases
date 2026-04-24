@@ -91,6 +91,7 @@ object ApiServer {
                                     app.inference.nativeGenerate(
                                         ctxPtr = session.contextPtr,
                                         prompt = req.prompt,
+                                        imageEmbedPtr = 0L,
                                         maxTokens = req.max_tokens,
                                         temperature = req.temperature,
                                         topP = req.top_p,

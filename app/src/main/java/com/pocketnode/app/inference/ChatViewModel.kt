@@ -167,6 +167,7 @@ class ChatViewModel(
 
     fun sendMessage(
         text: String,
+        imageBytes: ByteArray? = null,
         conversationId: Long,
         temp: Float = 0.7f,
         topP: Float = 0.9f,
@@ -208,9 +209,25 @@ class ChatViewModel(
                     }
                 }
 
+                var clipCtxPtr = 0L
+                var imageEmbedPtr = 0L
+
+                if (imageBytes != null) {
+                    val mmprojFile = File(app.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "mmproj-model-f16.gguf")
+                    if (mmprojFile.exists()) {
+                        clipCtxPtr = inference.nativeLoadMmproj(mmprojFile.absolutePath)
+                        if (clipCtxPtr != 0L) {
+                            imageEmbedPtr = inference.nativeMakeImageEmbed(clipCtxPtr, imageBytes)
+                        }
+                    }
+                }
+
                 inference.nativeGenerate(
-                    contextPtr, fullPrompt, maxTokens, temp, topP, topK, 1.1f, callback
+                    contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f, callback
                 )
+
+                if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
+                if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
 
                 repository.saveMessage(
                     ChatMessage(

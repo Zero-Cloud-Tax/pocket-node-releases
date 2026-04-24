@@ -7,6 +7,8 @@
 #include <unistd.h>
 
 #include "llama.h"
+#include "clip.h"
+#include "llava.h"
 #include <vector>
 #include <unordered_map>
 
@@ -68,6 +70,69 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetBackendName(
 #else
     return env->NewStringUTF("CPU");
 #endif
+}
+
+// =========================================================================
+// Vision (Multimodal) Model loading / Unloading
+// =========================================================================
+
+JNIEXPORT jlong JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeLoadMmproj(
+        JNIEnv *env, jobject /* this */,
+        jstring mmproj_path) {
+    const char *path = env->GetStringUTFChars(mmproj_path, nullptr);
+    LOGI("Loading multimodal projector: %s", path);
+
+    clip_ctx *ctx = clip_model_load(path, 1);
+    env->ReleaseStringUTFChars(mmproj_path, path);
+
+    if (!ctx) {
+        g_last_error = "Failed to load mmproj model.";
+        LOGE("%s", g_last_error.c_str());
+        return 0;
+    }
+    g_last_error.clear();
+    LOGI("Multimodal projector loaded");
+    return reinterpret_cast<jlong>(ctx);
+}
+
+JNIEXPORT void JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeFreeMmproj(
+        JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
+    if (ctx_ptr != 0) {
+        clip_free(reinterpret_cast<clip_ctx *>(ctx_ptr));
+        LOGI("Multimodal projector freed");
+    }
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeMakeImageEmbed(
+        JNIEnv *env, jobject /* this */, jlong ctx_ptr, jbyteArray image_bytes) {
+    if (ctx_ptr == 0 || image_bytes == nullptr) return 0;
+    clip_ctx *ctx = reinterpret_cast<clip_ctx *>(ctx_ptr);
+    
+    jsize len = env->GetArrayLength(image_bytes);
+    jbyte *bytes = env->GetByteArrayElements(image_bytes, nullptr);
+    
+    llava_image_embed *embed = llava_image_embed_make_with_bytes(
+            ctx, 4, reinterpret_cast<const unsigned char*>(bytes), len);
+            
+    env->ReleaseByteArrayElements(image_bytes, bytes, JNI_ABORT);
+    
+    if (!embed) {
+        g_last_error = "Failed to process image embedding.";
+        LOGE("%s", g_last_error.c_str());
+        return 0;
+    }
+    return reinterpret_cast<jlong>(embed);
+}
+
+JNIEXPORT void JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeFreeImageEmbed(
+        JNIEnv * /* env */, jobject /* this */, jlong embed_ptr) {
+    if (embed_ptr != 0) {
+        llava_image_embed_free(reinterpret_cast<llava_image_embed *>(embed_ptr));
+    }
 }
 
 // =========================================================================
@@ -163,7 +228,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeFreeContext(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         JNIEnv *env, jobject /* this */,
-        jlong ctx_ptr, jstring j_prompt,
+        jlong ctx_ptr, jstring j_prompt, jlong image_embed_ptr,
         jint max_tokens, jfloat temperature, jfloat top_p,
         jint top_k, jfloat repeat_penalty,
         jobject callback) {
@@ -206,6 +271,18 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     LOGI("Prompt tokens: %d, generating up to %d tokens", n_tokens, max_tokens);
 
     int n_past = g_n_past[ctx];
+
+    if (image_embed_ptr != 0) {
+        const llava_image_embed *embed = reinterpret_cast<const llava_image_embed *>(image_embed_ptr);
+        int n_batch = 2048; 
+        if (!llava_eval_image_embed(ctx, embed, n_batch, &n_past)) {
+            g_last_error = "Failed to evaluate image embedding";
+            LOGE("%s", g_last_error.c_str());
+            return;
+        }
+        g_n_past[ctx] = n_past;
+        LOGI("Evaluated image embed, n_past is now %d", n_past);
+    }
 
     if (n_past + n_tokens > llama_n_ctx(ctx)) {
         // Context full — clear KV cache and restart
