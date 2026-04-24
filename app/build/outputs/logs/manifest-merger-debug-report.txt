@@ -76,6 +76,7 @@ MERGED from [androidx.startup:startup-runtime:1.1.1] C:\Users\Rhear\.gradle\cach
 MERGED from [androidx.tracing:tracing:1.2.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\997f10eb9eec2db692b69a4437153e4a\transformed\tracing-1.2.0\AndroidManifest.xml:17:1-22:12
 MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\baffb6358b697e84c2e5ea74d326f501\transformed\versionedparcelable-1.1.1\AndroidManifest.xml:17:1-27:12
 MERGED from [androidx.annotation:annotation-experimental:1.4.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\3603a34826fbe2bcc06600b468a0fef4\transformed\annotation-experimental-1.4.1\AndroidManifest.xml:2:1-7:12
+MERGED from [com.tom-roush:pdfbox-android:2.0.27.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\e158e18ed212d219ef1e7b4a7ebd1775\transformed\pdfbox-android-2.0.27.0\AndroidManifest.xml:2:1-9:12
 	package
 		INJECTED from C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml
 	android:versionName
@@ -315,6 +316,8 @@ MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] C:\Users\Rh
 MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\baffb6358b697e84c2e5ea74d326f501\transformed\versionedparcelable-1.1.1\AndroidManifest.xml:20:5-22:41
 MERGED from [androidx.annotation:annotation-experimental:1.4.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\3603a34826fbe2bcc06600b468a0fef4\transformed\annotation-experimental-1.4.1\AndroidManifest.xml:5:5-44
 MERGED from [androidx.annotation:annotation-experimental:1.4.1] C:\Users\Rhear\.gradle\caches\8.13\transforms\3603a34826fbe2bcc06600b468a0fef4\transformed\annotation-experimental-1.4.1\AndroidManifest.xml:5:5-44
+MERGED from [com.tom-roush:pdfbox-android:2.0.27.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\e158e18ed212d219ef1e7b4a7ebd1775\transformed\pdfbox-android-2.0.27.0\AndroidManifest.xml:5:5-7:41
+MERGED from [com.tom-roush:pdfbox-android:2.0.27.0] C:\Users\Rhear\.gradle\caches\8.13\transforms\e158e18ed212d219ef1e7b4a7ebd1775\transformed\pdfbox-android-2.0.27.0\AndroidManifest.xml:5:5-7:41
 	android:targetSdkVersion
 		INJECTED from C:\Users\Rhear\Pocket Node\app\src\main\AndroidManifest.xml
 	android:minSdkVersion

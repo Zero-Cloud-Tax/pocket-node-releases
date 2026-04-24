@@ -1,6 +1,8 @@
 package com.pocketnode.app.ui.screens
 
 import android.widget.TextView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -14,7 +16,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -34,7 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.pocketnode.app.data.model.ChatMessage
+import com.pocketnode.app.inference.DocumentReader
 import io.noties.markwon.Markwon
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -56,6 +62,35 @@ fun ChatScreen(
     onNavigateToSettings: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
+    var attachedFileName by remember { mutableStateOf<String?>(null) }
+    var attachedDocumentText by remember { mutableStateOf<String?>(null) }
+    var isReadingDocument by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    val documentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            uri?.let {
+                isReadingDocument = true
+                coroutineScope.launch {
+                    val text = DocumentReader.extractText(context, it)
+                    var name = "Document"
+                    context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst()) {
+                            name = cursor.getString(nameIndex)
+                        }
+                    }
+                    attachedFileName = name
+                    attachedDocumentText = text
+                    isReadingDocument = false
+                }
+            }
+        }
+    )
+
 
     val listState = rememberLazyListState()
     val totalItems = messages.size + (if (isGenerating) 1 else 0)
@@ -182,12 +217,25 @@ fun ChatScreen(
                 text = inputText,
                 onTextChange = { inputText = it },
                 onSend = {
-                    onSendMessage(inputText, 0.7f, 0.9f, 40)
+                    var finalPrompt = inputText
+                    if (attachedDocumentText != null) {
+                        finalPrompt = "Context Document ($attachedFileName):\n```\n$attachedDocumentText\n```\n\nUser Query: $inputText"
+                        attachedFileName = null
+                        attachedDocumentText = null
+                    }
+                    onSendMessage(finalPrompt, 0.7f, 0.9f, 40)
                     inputText = ""
                 },
                 isGenerating = isGenerating,
                 onStop = onStopGeneration,
-                enabled = isModelReady && !isLoadingModel
+                enabled = isModelReady && !isLoadingModel,
+                onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain")) },
+                attachedFileName = attachedFileName,
+                onRemoveAttachment = {
+                    attachedFileName = null
+                    attachedDocumentText = null
+                },
+                isReadingDocument = isReadingDocument
             )
         }
     }
@@ -332,19 +380,54 @@ fun ChatInputBar(
     onSend: () -> Unit,
     isGenerating: Boolean,
     onStop: () -> Unit,
-    enabled: Boolean
+    enabled: Boolean,
+    onAttach: () -> Unit,
+    attachedFileName: String?,
+    onRemoveAttachment: () -> Unit,
+    isReadingDocument: Boolean
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (attachedFileName != null || isReadingDocument) {
+            Surface(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 4.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Description, contentDescription = "Document",
+                        modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (isReadingDocument) {
+                        Text("Reading document...", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    } else {
+                        Text(attachedFileName ?: "", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onRemoveAttachment, modifier = Modifier.size(20.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 8.dp
         ) {
-            TextField(
-                value = text,
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onAttach, enabled = enabled && !isGenerating && !isReadingDocument) {
+                    Icon(Icons.Default.Add, contentDescription = "Attach Document", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextField(
+                    value = text,
                 onValueChange = onTextChange,
                 modifier = Modifier.weight(1f).clip(CircleShape),
                 placeholder = { Text("Message Pocket Node...") },
@@ -385,6 +468,7 @@ fun ChatInputBar(
             }
         }
     }
+}
 }
 
 @Composable
