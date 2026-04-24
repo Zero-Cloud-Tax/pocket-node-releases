@@ -46,10 +46,14 @@ FetchContent_MakeAvailable(llama_cpp)
 # ============================================================
 add_library(pocketnode SHARED
     pocketnode_jni.cpp
+    ${llama_cpp_SOURCE_DIR}/examples/llava/clip.cpp
+    ${llama_cpp_SOURCE_DIR}/examples/llava/llava.cpp
 )
 
 target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/include
+    ${llama_cpp_SOURCE_DIR}/examples/llava
+    ${llama_cpp_SOURCE_DIR}/common
     "${VULKAN_SDK}/Include"
 )
 

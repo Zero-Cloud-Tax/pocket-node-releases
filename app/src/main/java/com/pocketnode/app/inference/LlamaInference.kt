@@ -19,6 +19,7 @@ class LlamaInference {
     external fun nativeGenerate(
         ctxPtr: Long,
         prompt: String,
+        imageEmbedPtr: Long,
         maxTokens: Int,
         temperature: Float,
         topP: Float,
@@ -35,4 +36,10 @@ class LlamaInference {
     external fun nativeGetLastError(): String
     external fun nativeGetBackendName(): String
     external fun nativeCloseFd(fd: Int)
+
+    // Multi-Modal
+    external fun nativeLoadMmproj(mmprojPath: String): Long
+    external fun nativeFreeMmproj(ctxPtr: Long)
+    external fun nativeMakeImageEmbed(ctxPtr: Long, imageBytes: ByteArray): Long
+    external fun nativeFreeImageEmbed(embedPtr: Long)
 }

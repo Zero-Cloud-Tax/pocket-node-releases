@@ -55,7 +55,7 @@ fun ChatScreen(
     modelName: String?,
     modelError: String?,
     backendName: String,
-    onSendMessage: (String, Float, Float, Int) -> Unit,
+    onSendMessage: (String, ByteArray?, Float, Float, Int) -> Unit,
     onClearChat: () -> Unit,
     onStopGeneration: () -> Unit,
     onDismissError: () -> Unit,
@@ -64,6 +64,7 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachedDocumentText by remember { mutableStateOf<String?>(null) }
+    var attachedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var isReadingDocument by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -75,16 +76,37 @@ fun ChatScreen(
             uri?.let {
                 isReadingDocument = true
                 coroutineScope.launch {
-                    val text = DocumentReader.extractText(context, it)
-                    var name = "Document"
+                    val mimeType = context.contentResolver.getType(it)
+                    var name = "File"
                     context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
                         val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                         if (cursor.moveToFirst()) {
                             name = cursor.getString(nameIndex)
                         }
                     }
-                    attachedFileName = name
-                    attachedDocumentText = text
+                    if (mimeType?.startsWith("image/") == true) {
+                        val bytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val inputStream = context.contentResolver.openInputStream(it)
+                            val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                            inputStream?.close()
+                            if (bitmap != null) {
+                                val maxDim = 512f
+                                val scale = Math.min(maxDim / bitmap.width.toFloat(), maxDim / bitmap.height.toFloat())
+                                val finalBitmap = if (scale < 1f) {
+                                    android.graphics.Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
+                                } else bitmap
+                                val outStream = java.io.ByteArrayOutputStream()
+                                finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, outStream)
+                                outStream.toByteArray()
+                            } else null
+                        }
+                        attachedFileName = name
+                        attachedImageBytes = bytes
+                    } else {
+                        val text = DocumentReader.extractText(context, it)
+                        attachedFileName = name
+                        attachedDocumentText = text
+                    }
                     isReadingDocument = false
                 }
             }
@@ -220,20 +242,22 @@ fun ChatScreen(
                     var finalPrompt = inputText
                     if (attachedDocumentText != null) {
                         finalPrompt = "Context Document ($attachedFileName):\n```\n$attachedDocumentText\n```\n\nUser Query: $inputText"
-                        attachedFileName = null
-                        attachedDocumentText = null
                     }
-                    onSendMessage(finalPrompt, 0.7f, 0.9f, 40)
+                    onSendMessage(finalPrompt, attachedImageBytes, 0.7f, 0.9f, 40)
                     inputText = ""
+                    attachedFileName = null
+                    attachedDocumentText = null
+                    attachedImageBytes = null
                 },
                 isGenerating = isGenerating,
                 onStop = onStopGeneration,
                 enabled = isModelReady && !isLoadingModel,
-                onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain")) },
+                onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain", "image/*")) },
                 attachedFileName = attachedFileName,
                 onRemoveAttachment = {
                     attachedFileName = null
                     attachedDocumentText = null
+                    attachedImageBytes = null
                 },
                 isReadingDocument = isReadingDocument
             )
