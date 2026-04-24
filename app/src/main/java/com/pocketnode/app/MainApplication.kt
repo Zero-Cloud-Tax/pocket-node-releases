@@ -2,6 +2,7 @@ package com.pocketnode.app
 
 import android.app.Application
 import com.pocketnode.app.inference.LlamaInference
+import com.pocketnode.app.inference.DocumentReader
 import com.pocketnode.app.licensing.LicenseManager
 
 // Shared inference state accessible by both ChatViewModel and the Edge API service.
@@ -27,5 +28,6 @@ class MainApplication : Application() {
         super.onCreate()
         inference = LlamaInference()
         licenseManager = LicenseManager(this)
+        DocumentReader.init(this)
     }
 }

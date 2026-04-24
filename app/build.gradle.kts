@@ -116,4 +116,7 @@ dependencies {
 
     // Serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // PDF Parsing
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }
