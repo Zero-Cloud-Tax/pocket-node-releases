@@ -133,12 +133,13 @@ class MainActivity : ComponentActivity() {
                                 val maxTokens by settingsVm.maxTokens.collectAsState()
                                 val contextSize by settingsVm.contextSize.collectAsState()
                                 val threadCount by settingsVm.threadCount.collectAsState()
+                                val gpuLayers by settingsVm.gpuLayers.collectAsState()
                                 val systemPrompt by settingsVm.systemPrompt.collectAsState()
                                 val template by settingsVm.selectedTemplate.collectAsState()
 
-                                LaunchedEffect(modelPath, contextSize, threadCount) {
+                                LaunchedEffect(modelPath, contextSize, threadCount, gpuLayers) {
                                     modelPath?.let {
-                                        chatVm.loadModel(it, contextSize, threadCount)
+                                        chatVm.loadModel(it, contextSize, threadCount, gpuLayers)
                                     }
                                 }
 

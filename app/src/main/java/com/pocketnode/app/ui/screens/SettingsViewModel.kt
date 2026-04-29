@@ -22,6 +22,8 @@ private object Keys {
     val SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
     val TEMPLATE_NAME = stringPreferencesKey("template_name")
     val EDGE_API_ENABLED = booleanPreferencesKey("edge_api_enabled")
+    val GPU_LAYERS = intPreferencesKey("gpu_layers")
+    val API_KEY = stringPreferencesKey("api_key")
 }
 
 class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewModel() {
@@ -61,6 +63,12 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val edgeApiEnabled: StateFlow<Boolean> = _prefs.map { it[Keys.EDGE_API_ENABLED] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    val gpuLayers: StateFlow<Int> = _prefs.map { it[Keys.GPU_LAYERS] ?: 10 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 10)
+
+    val apiKey: StateFlow<String> = _prefs.map { it[Keys.API_KEY] ?: "" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     val selectedTemplate: StateFlow<PromptTemplate> = templateName.map { name ->
         when (name) {
             "Llama3" -> PromptTemplate.Llama3
@@ -78,6 +86,8 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     fun setSystemPrompt(v: String) = save { it[Keys.SYSTEM_PROMPT] = v }
     fun setTemplateName(v: String) = save { it[Keys.TEMPLATE_NAME] = v }
     fun setEdgeApiEnabled(v: Boolean) = save { it[Keys.EDGE_API_ENABLED] = v }
+    fun setGpuLayers(v: Int) = save { it[Keys.GPU_LAYERS] = v }
+    fun setApiKey(v: String) = save { it[Keys.API_KEY] = v }
 
     private fun save(block: (MutablePreferences) -> Unit) {
         viewModelScope.launch { dataStore.edit(block) }

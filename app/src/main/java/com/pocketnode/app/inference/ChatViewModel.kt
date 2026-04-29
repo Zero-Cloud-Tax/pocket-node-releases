@@ -1,5 +1,6 @@
 package com.pocketnode.app.inference
 
+import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -90,6 +91,20 @@ class ChatViewModel(
                 isModelReady.value = false
                 modelError.value = null
                 modelName.value = displayName
+            }
+
+            // RAM Validation
+            val activityManager = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val memInfo = android.app.ActivityManager.MemoryInfo()
+            activityManager.getMemoryInfo(memInfo)
+            
+            // If less than 800MB available, warn and prevent load
+            if (memInfo.availMem < 800L * 1024 * 1024) {
+                withContext(Dispatchers.Main) {
+                    modelError.value = "Not enough RAM available. Please close other apps or use a smaller quantization model."
+                    isLoadingModel.value = false
+                }
+                return@launch
             }
 
             var nextModelPtr = 0L
@@ -201,10 +216,36 @@ class ChatViewModel(
                     template = template
                 )
 
+                // Save an empty assistant message first to get its ID
+                val assistantMsgId = repository.saveMessage(
+                    ChatMessage(conversationId = conversationId, role = "assistant", content = "")
+                )
+                
+                var partialMessage = ""
+                var lastUiUpdateTime = 0L
+                var lastDbSaveTime = 0L
+
                 val callback = object : LlamaCallback {
                     override fun onToken(token: String) {
-                        viewModelScope.launch(Dispatchers.Main) {
-                            currentAssistantMessage.value += token
+                        partialMessage += token
+                        val now = System.currentTimeMillis()
+                        
+                        // Batch UI updates every 50ms
+                        if (now - lastUiUpdateTime > 50) {
+                            lastUiUpdateTime = now
+                            viewModelScope.launch(Dispatchers.Main) {
+                                currentAssistantMessage.value = partialMessage
+                            }
+                        }
+                        
+                        // Periodically persist to DB every 2000ms
+                        if (now - lastDbSaveTime > 2000) {
+                            lastDbSaveTime = now
+                            viewModelScope.launch(Dispatchers.IO) {
+                                repository.updateMessage(
+                                    ChatMessage(id = assistantMsgId, conversationId = conversationId, role = "assistant", content = partialMessage)
+                                )
+                            }
                         }
                     }
                 }
@@ -229,11 +270,13 @@ class ChatViewModel(
                 if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
                 if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
 
-                repository.saveMessage(
+                // Final save to DB
+                repository.updateMessage(
                     ChatMessage(
+                        id = assistantMsgId,
                         conversationId = conversationId,
                         role = "assistant",
-                        content = currentAssistantMessage.value
+                        content = partialMessage
                     )
                 )
             } catch (e: OutOfMemoryError) {

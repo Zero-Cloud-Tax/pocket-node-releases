@@ -42,6 +42,9 @@ fun ModelsScreen(
     val models by viewModel.models.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
 
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var downloadUrl by remember { mutableStateOf("") }
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri -> uri?.let { viewModel.importModel(context, it) } }
@@ -94,6 +97,16 @@ fun ModelsScreen(
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = "Import GGUF — Pro")
                     }
+                }
+
+                FloatingActionButton(
+                    onClick = { showUrlDialog = true },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = "Download URL")
                 }
 
                 FloatingActionButton(
@@ -167,6 +180,40 @@ fun ModelsScreen(
                 item { EmptyModelsPlaceholder() }
             }
         }
+    }
+
+    if (showUrlDialog) {
+        AlertDialog(
+            onDismissRequest = { showUrlDialog = false },
+            title = { Text("Download Model") },
+            text = {
+                OutlinedTextField(
+                    value = downloadUrl,
+                    onValueChange = { downloadUrl = it },
+                    label = { Text("Hugging Face GGUF URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (downloadUrl.isNotBlank()) {
+                            viewModel.downloadModelFromUrl(context, downloadUrl)
+                        }
+                        showUrlDialog = false
+                        downloadUrl = ""
+                    }
+                ) {
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUrlDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -277,8 +324,22 @@ fun InstalledModelCard(model: LocalModel, onSelect: () -> Unit, onDelete: () -> 
             Column(modifier = Modifier.weight(1f)) {
                 Text(model.name, style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold)
-                Text(model.path.split("/").last(), style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                
+                // Extract Quantization (e.g. Q4_K_M)
+                val quantRegex = Regex("(Q[1-8]_[A-Z0-9_]+)", RegexOption.IGNORE_CASE)
+                val quantMatch = quantRegex.find(model.path) ?: quantRegex.find(model.name)
+                
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(model.path.split("/").last(), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    
+                    if (quantMatch != null) {
+                        Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                            Text(quantMatch.value.uppercase(), color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontSize = 10.sp)
+                        }
+                    }
+                }
             }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete",

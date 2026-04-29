@@ -40,6 +40,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.inference.DocumentReader
 import io.noties.markwon.Markwon
+import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.ext.latex.JLatexMathPlugin
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -498,7 +500,12 @@ fun ChatInputBar(
 @Composable
 fun MarkdownText(markdown: String, modifier: Modifier = Modifier, color: Color) {
     val context = LocalContext.current
-    val markwon = remember { Markwon.create(context) }
+    val markwon = remember { 
+        Markwon.builder(context)
+            .usePlugin(TablePlugin.create(context))
+            .usePlugin(JLatexMathPlugin.create(40f)) // Use a 40f text size for math rendering, or default
+            .build()
+    }
 
     AndroidView(
         factory = { ctx ->

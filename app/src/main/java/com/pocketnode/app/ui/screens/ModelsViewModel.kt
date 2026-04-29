@@ -42,6 +42,14 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
 
     fun downloadModel(context: Context, remoteModel: RemoteModel) {
         val appContext = context.applicationContext
+
+        // Storage Validation: Require at least 5GB of free space
+        val dataDir = Environment.getDataDirectory()
+        if (dataDir.usableSpace < 5L * 1024 * 1024 * 1024) {
+            setDownloadState(remoteModel.name, DownloadState.Error("Not enough storage space (5GB req)"))
+            return
+        }
+
         val destFile = File(
             appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
             "${remoteModel.name}.gguf"
@@ -64,6 +72,19 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         viewModelScope.launch {
             pollDownload(appContext, downloadManager, downloadId, remoteModel.name, destFile)
         }
+    }
+
+    fun downloadModelFromUrl(context: Context, url: String) {
+        val name = url.substringAfterLast("/").substringBefore("?")
+        val cleanName = if (name.endsWith(".gguf")) name.removeSuffix(".gguf") else "DownloadedModel"
+        
+        val remoteModel = RemoteModel(
+            name = cleanName,
+            description = "Custom downloaded model",
+            size = "Unknown",
+            huggingFaceUrl = url
+        )
+        downloadModel(context, remoteModel)
     }
 
     private suspend fun pollDownload(

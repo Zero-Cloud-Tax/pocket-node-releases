@@ -1,4 +1,0 @@
-CMake Warning at C:/Users/Rhear/Pocket Node/app/.cxx/Debug/1e206b5i/x86_64/_deps/llama_cpp-src/ggml/src/ggml-amx/CMakeLists.txt:106 (message):
-  AMX requires x86 and gcc version > 11.0.  Turning off GGML_AMX.
-
-
