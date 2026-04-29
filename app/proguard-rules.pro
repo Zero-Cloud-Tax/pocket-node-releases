@@ -21,3 +21,11 @@
 -keepclassmembernames class kotlinx.** {
     volatile <fields>;
 }
+
+# Markwon (Markdown Rendering)
+-keep class io.noties.markwon.** { *; }
+-dontwarn io.noties.markwon.**
+
+# PdfBox-Android (PDF parsing)
+-keep class com.tom_roush.pdfbox.** { *; }
+-dontwarn com.tom_roush.pdfbox.**
