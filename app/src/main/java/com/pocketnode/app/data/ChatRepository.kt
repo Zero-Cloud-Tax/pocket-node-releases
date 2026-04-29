@@ -9,8 +9,11 @@ class ChatRepository(private val chatDao: ChatDao) {
     fun getMessages(conversationId: Long): Flow<List<ChatMessage>> =
         chatDao.getMessagesForConversation(conversationId)
 
-    suspend fun saveMessage(message: ChatMessage) =
+    suspend fun saveMessage(message: ChatMessage): Long =
         chatDao.insertMessage(message)
+
+    suspend fun updateMessage(message: ChatMessage) =
+        chatDao.updateMessage(message)
 
     suspend fun clearConversation(conversationId: Long) {
         chatDao.deleteMessagesForConversation(conversationId)

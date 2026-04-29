@@ -14,6 +14,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.first
+import com.pocketnode.app.ui.screens.settingsDataStore
+import androidx.datastore.preferences.core.stringPreferencesKey
 
 @Serializable
 data class GenerateRequest(
@@ -47,6 +50,17 @@ object ApiServer {
                 }
 
                 post("/api/generate") {
+                    // API Key validation
+                    val prefs = app.settingsDataStore.data.first()
+                    val expectedKey = prefs[stringPreferencesKey("api_key")] ?: ""
+                    if (expectedKey.isNotBlank()) {
+                        val authHeader = call.request.header("Authorization")
+                        if (authHeader != "Bearer $expectedKey") {
+                            call.respond(HttpStatusCode.Unauthorized, """{"error":"unauthorized"}""")
+                            return@post
+                        }
+                    }
+
                     val session = app.activeSession
                     if (session == null) {
                         call.respond(

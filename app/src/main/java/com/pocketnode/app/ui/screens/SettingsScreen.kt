@@ -43,6 +43,8 @@ fun SettingsScreen(
     val systemPrompt by settings.systemPrompt.collectAsState()
     val templateName by settings.templateName.collectAsState()
     val edgeApiEnabled by settings.edgeApiEnabled.collectAsState()
+    val gpuLayers by settings.gpuLayers.collectAsState()
+    val apiKey by settings.apiKey.collectAsState()
 
     var licenseInput by remember { mutableStateOf("") }
     var licenseStatus by remember { mutableStateOf<Boolean?>(null) }
@@ -103,6 +105,14 @@ fun SettingsScreen(
                 steps = 6,
                 onValueChange = { settings.setThreadCount(it.toInt()) }
             )
+            LabeledSlider(
+                label = "GPU Layers",
+                value = gpuLayers.toFloat(),
+                displayValue = "$gpuLayers",
+                range = 0f..100f,
+                steps = 99,
+                onValueChange = { settings.setGpuLayers(it.toInt()) }
+            )
         }
 
         // ── System Prompt ──
@@ -159,6 +169,18 @@ fun SettingsScreen(
                             settings.setEdgeApiEnabled(enabled)
                             if (enabled) promptBatteryExemption(context)
                         }
+                    )
+                }
+
+                if (edgeApiEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { settings.setApiKey(it) },
+                        label = { Text("API Key (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Leave blank for open access") }
                     )
                 }
             }

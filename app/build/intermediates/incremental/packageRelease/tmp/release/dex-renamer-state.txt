@@ -1,4 +1,0 @@
-#Sun Apr 19 22:52:30 EDT 2026
-base.0=C\:\\Users\\Rhear\\PrivateLLM\\app\\build\\intermediates\\dex\\release\\minifyReleaseWithR8\\classes.dex
-path.0=classes.dex
-renamed.0=classes.dex

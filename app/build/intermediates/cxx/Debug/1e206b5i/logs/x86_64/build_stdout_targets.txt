@@ -1,2 +1,0 @@
-ninja: Entering directory `C:\Users\Rhear\Pocket Node\app\.cxx\Debug\1e206b5i\x86_64'
-ninja: no work to do.

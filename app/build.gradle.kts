@@ -107,6 +107,8 @@ dependencies {
 
     // Markdown Parsing
     implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-latex:4.6.2")
 
     // Ktor embedded server for Edge API (CIO engine — no native deps, Android-safe)
     val ktorVersion = "3.0.3"

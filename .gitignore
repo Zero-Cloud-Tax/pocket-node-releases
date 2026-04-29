@@ -4,9 +4,12 @@
 /.idea
 .DS_Store
 /build
+/app/build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 keystore.properties
 *.jks
+*.obj
+app-debug.apk

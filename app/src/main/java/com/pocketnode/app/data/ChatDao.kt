@@ -20,7 +20,10 @@ interface ChatDao {
     fun getMessagesForConversation(conversationId: Long): Flow<List<ChatMessage>>
 
     @Insert
-    suspend fun insertMessage(message: ChatMessage)
+    suspend fun insertMessage(message: ChatMessage): Long
+
+    @Update
+    suspend fun updateMessage(message: ChatMessage)
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteMessagesForConversation(conversationId: Long)
