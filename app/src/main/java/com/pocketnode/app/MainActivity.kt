@@ -7,7 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -20,7 +20,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.room.Room
 import com.pocketnode.app.data.AppDatabase
 import com.pocketnode.app.data.ChatRepository
 import com.pocketnode.app.data.ModelManager
@@ -44,9 +43,7 @@ class MainActivity : ComponentActivity() {
 
         val app = application as MainApplication
 
-        val db = Room.databaseBuilder(
-            applicationContext, AppDatabase::class.java, "pocketnode.db"
-        ).fallbackToDestructiveMigration().build()
+        val db = AppDatabase.getInstance(applicationContext)
 
         val modelManager = ModelManager(this)
         val chatRepository = ChatRepository(db.chatDao())
@@ -95,7 +92,7 @@ class MainActivity : ComponentActivity() {
                             navigationIcon = {
                                 if (showBack) {
                                     IconButton(onClick = { navController.popBackStack() }) {
-                                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                                     }
                                 }
                             }

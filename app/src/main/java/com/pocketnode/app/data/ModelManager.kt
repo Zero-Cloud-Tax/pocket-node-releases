@@ -1,15 +1,11 @@
 package com.pocketnode.app.data
 
 import android.content.Context
-import androidx.room.Room
 import com.pocketnode.app.data.model.LocalModel
 import kotlinx.coroutines.flow.Flow
 
 class ModelManager(context: Context) {
-    private val db = Room.databaseBuilder(
-        context.applicationContext,
-        AppDatabase::class.java, "pocketnode.db"
-    ).build()
+    private val db = AppDatabase.getInstance(context)
 
     private val modelDao = db.modelDao()
 

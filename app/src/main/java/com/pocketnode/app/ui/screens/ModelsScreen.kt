@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Recommend
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -157,10 +158,20 @@ fun ModelsScreen(
 
             items(RECOMMENDED_MODELS) { remoteModel ->
                 val state = downloadStates[remoteModel.name] ?: DownloadState.Idle
+                val isBasicModel = remoteModel == RECOMMENDED_MODELS.first()
+                val canDownload = isPro || isBasicModel
+                
                 RemoteModelCard(
                     model = remoteModel,
                     downloadState = state,
-                    onDownload = { viewModel.downloadModel(context, remoteModel) },
+                    isLocked = !canDownload,
+                    onDownload = { 
+                        if (canDownload) {
+                            viewModel.downloadModel(context, remoteModel) 
+                        } else {
+                            onNavigateToUpgrade()
+                        }
+                    },
                     onReset = { viewModel.resetDownloadState(remoteModel.name) }
                 )
             }
@@ -232,6 +243,7 @@ fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.Image
 fun RemoteModelCard(
     model: RemoteModel,
     downloadState: DownloadState,
+    isLocked: Boolean = false,
     onDownload: () -> Unit,
     onReset: () -> Unit
 ) {
@@ -271,13 +283,16 @@ fun RemoteModelCard(
                         IconButton(
                             onClick = onDownload,
                             colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                containerColor = if (isLocked) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                                contentColor = if (isLocked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary
                             ),
                             modifier = Modifier.size(40.dp)
                         ) {
-                            Icon(Icons.Default.Download, contentDescription = "Download",
-                                modifier = Modifier.size(20.dp))
+                            Icon(
+                                if (isLocked) Icons.Default.Lock else Icons.Default.Download, 
+                                contentDescription = if (isLocked) "Pro Required" else "Download",
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
                     is DownloadState.Downloading -> {
