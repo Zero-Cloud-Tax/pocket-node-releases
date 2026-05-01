@@ -36,7 +36,9 @@ jobs:
           echo "storeFile=${{ github.workspace }}/app/release.keystore" >> keystore.properties
 
       - name: Decode Keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_B64" | tr -d '\n\r ' | base64 --decode > app/release.keystore
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
