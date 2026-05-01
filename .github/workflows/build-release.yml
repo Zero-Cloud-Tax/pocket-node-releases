@@ -33,10 +33,10 @@ jobs:
           echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" > keystore.properties
           echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> keystore.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> keystore.properties
-          echo "storeFile=release.keystore" >> keystore.properties
+          echo "storeFile=${{ github.workspace }}/app/release.keystore" >> keystore.properties
 
       - name: Decode Keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/release.keystore
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
