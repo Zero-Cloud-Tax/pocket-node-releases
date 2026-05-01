@@ -30,12 +30,14 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
 # Vulkan GPU backend — requires Vulkan SDK (with glslc) installed on the build host.
-set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
-set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
-set(_ggml_vk_genshaders_cmd "${VULKAN_SDK}/Bin/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
-
-# Ensure Vulkan headers are found by all sub-projects (including llama.cpp)
-include_directories("${VULKAN_SDK}/Include")
+if(CMAKE_HOST_WIN32)
+    set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
+    set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
+    set(_ggml_vk_genshaders_cmd "${VULKAN_SDK}/Bin/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
+    include_directories("${VULKAN_SDK}/Include")
+else()
+    find_program(Vulkan_GLSLC_EXECUTABLE glslc)
+endif()
 
 set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 

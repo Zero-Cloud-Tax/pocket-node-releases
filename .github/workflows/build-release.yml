@@ -25,6 +25,9 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      - name: Install Vulkan Tools
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools libvulkan-dev
+
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
 
