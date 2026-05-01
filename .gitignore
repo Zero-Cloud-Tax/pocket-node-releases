@@ -13,3 +13,5 @@ keystore.properties
 *.jks
 *.obj
 app-debug.apk
+.gradle-user/
+release.keystore

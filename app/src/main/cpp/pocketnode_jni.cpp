@@ -270,7 +270,12 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 
     LOGI("Prompt tokens: %d, generating up to %d tokens", n_tokens, max_tokens);
 
-    int n_past = g_n_past[ctx];
+    // Kotlin sends a complete prompt, including recent chat history, on each
+    // request. Start from a clean KV cache so prior requests are not replayed
+    // underneath that full prompt.
+    llama_kv_cache_clear(ctx);
+    int n_past = 0;
+    g_n_past[ctx] = 0;
 
     if (image_embed_ptr != 0) {
         const llava_image_embed *embed = reinterpret_cast<const llava_image_embed *>(image_embed_ptr);

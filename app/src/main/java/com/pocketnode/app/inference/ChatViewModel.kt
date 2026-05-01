@@ -31,6 +31,9 @@ class ChatViewModel(
     private var modelPtr = 0L
     private var contextPtr = 0L
     private var loadedModelPath: String? = null
+    private var loadedContextSize = 0
+    private var loadedThreadCount = 0
+    private var loadedGpuLayers = 0
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
 
@@ -59,7 +62,13 @@ class ChatViewModel(
         threadCount: Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 6),
         nGpuLayers: Int = 0
     ) {
-        if (loadedModelPath == modelPath && contextPtr != 0L) return
+        if (
+            loadedModelPath == modelPath &&
+            loadedContextSize == contextSize &&
+            loadedThreadCount == threadCount &&
+            loadedGpuLayers == nGpuLayers &&
+            contextPtr != 0L
+        ) return
 
         viewModelScope.launch(Dispatchers.IO) {
             // Resolve content:// URI → /proc/self/fd/<N>, or use the path directly
@@ -100,6 +109,7 @@ class ChatViewModel(
             
             // If less than 800MB available, warn and prevent load
             if (memInfo.availMem < 800L * 1024 * 1024) {
+                if (newFd >= 0) inference.nativeCloseFd(newFd)
                 withContext(Dispatchers.Main) {
                     modelError.value = "Not enough RAM available. Please close other apps or use a smaller quantization model."
                     isLoadingModel.value = false
@@ -141,6 +151,9 @@ class ChatViewModel(
                 modelPtr = nextModelPtr
                 contextPtr = nextContextPtr
                 loadedModelPath = modelPath
+                loadedContextSize = contextSize
+                loadedThreadCount = threadCount
+                loadedGpuLayers = nGpuLayers
 
                 app.activeSession = InferenceSession(contextPtr, displayName)
 
@@ -178,6 +191,9 @@ class ChatViewModel(
         // Close the new FD that failed — don't close rawFd (still owned by previous model)
         if (newFd >= 0 && newFd != rawFd) inference.nativeCloseFd(newFd)
         loadedModelPath = null
+        loadedContextSize = 0
+        loadedThreadCount = 0
+        loadedGpuLayers = 0
     }
 
     fun sendMessage(
@@ -323,6 +339,10 @@ class ChatViewModel(
         app.activeSession = null
         if (contextPtr != 0L) inference.nativeFreeContext(contextPtr)
         if (modelPtr != 0L) inference.nativeFreeModel(modelPtr)
+        loadedModelPath = null
+        loadedContextSize = 0
+        loadedThreadCount = 0
+        loadedGpuLayers = 0
         closeFdIfNeeded()
     }
 }
