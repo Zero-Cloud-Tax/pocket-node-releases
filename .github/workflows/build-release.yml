@@ -28,6 +28,16 @@ jobs:
       - name: Install Vulkan Tools
         run: sudo apt-get update && sudo apt-get install -y glslang-tools libvulkan-dev
 
+      - name: Pre-build vulkan-shaders-gen for host
+        run: |
+          git clone https://github.com/ggerganov/llama.cpp.git llama_host
+          cd llama_host
+          git checkout b4160
+          mkdir build && cd build
+          cmake .. -DGGML_VULKAN=ON
+          cmake --build . --target vulkan-shaders-gen
+          sudo cp bin/vulkan-shaders-gen /usr/local/bin/ || sudo cp vulkan-shaders-gen /usr/local/bin/ || sudo find . -name "vulkan-shaders-gen" -exec cp {} /usr/local/bin/ \;
+
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
 
