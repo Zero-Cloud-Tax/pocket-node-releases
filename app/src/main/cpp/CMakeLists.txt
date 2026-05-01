@@ -29,17 +29,17 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # Enable mmap so models stream from storage instead of loading fully into RAM
 set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
-# Vulkan GPU backend — requires Vulkan SDK (with glslc) installed on the build host.
+# Vulkan GPU backend — only enabled when building locally on Windows with the SDK installed.
+# CI (Linux) builds CPU-only; Android uses device Vulkan drivers at runtime.
 if(CMAKE_HOST_WIN32)
     set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
     set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
     set(_ggml_vk_genshaders_cmd "${VULKAN_SDK}/Bin/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
     include_directories("${VULKAN_SDK}/Include")
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 else()
-    find_program(Vulkan_GLSLC_EXECUTABLE glslc)
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 endif()
-
-set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(llama_cpp)
 
