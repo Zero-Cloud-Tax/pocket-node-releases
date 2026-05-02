@@ -32,6 +32,9 @@ import com.pocketnode.app.ui.screens.ModelsViewModel
 import com.pocketnode.app.ui.screens.SettingsScreen
 import com.pocketnode.app.ui.screens.SettingsViewModel
 import com.pocketnode.app.ui.screens.UpgradeScreen
+import com.pocketnode.app.ui.screens.GalleryScreen
+import com.pocketnode.app.ui.screens.PromptLabScreen
+import com.pocketnode.app.ui.screens.AskImageScreen
 import com.pocketnode.app.ui.screens.settingsDataStore
 import com.pocketnode.app.ui.theme.PocketNodeTheme
 
@@ -77,12 +80,15 @@ class MainActivity : ComponentActivity() {
                 val currentRoute = navBackStackEntry?.destination?.route ?: ""
 
                 val title = when {
-                    currentRoute.startsWith("chat") -> "Chat"
+                    currentRoute.startsWith("chat") -> "AI Chat"
+                    currentRoute.startsWith("ask_image") -> "Ask Image"
+                    currentRoute.startsWith("prompt_lab") -> "Prompt Lab"
+                    currentRoute.startsWith("models") -> "Model Hub"
                     currentRoute == "settings" -> "Settings"
                     currentRoute == "upgrade" -> "Go Pro"
                     else -> "Pocket Node"
                 }
-                val showBack = currentRoute != "models"
+                val showBack = currentRoute != "gallery"
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -103,15 +109,29 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize().padding(innerPadding),
                         color = MaterialTheme.colorScheme.background
                     ) {
-                        NavHost(navController = navController, startDestination = "models") {
+                        NavHost(navController = navController, startDestination = "gallery") {
+                            
+                            composable("gallery") {
+                                GalleryScreen(
+                                    onNavigate = { route -> navController.navigate(route) }
+                                )
+                            }
 
-                            composable("models") {
+                            composable("models/{mode}") { backStackEntry ->
+                                val mode = backStackEntry.arguments?.getString("mode") ?: "manage"
                                 val vm: ModelsViewModel = viewModel(factory = factory)
                                 ModelsScreen(
                                     viewModel = vm,
                                     isPro = isPro,
                                     onModelSelected = { model ->
-                                        navController.navigate("chat/${Uri.encode(model.path)}")
+                                        when (mode) {
+                                            "chat" -> navController.navigate("chat/${Uri.encode(model.path)}")
+                                            "ask_image" -> navController.navigate("ask_image/${Uri.encode(model.path)}")
+                                            "prompt_lab" -> navController.navigate("prompt_lab/${Uri.encode(model.path)}")
+                                            else -> { /* In manage mode, maybe just show details or go to chat as default */ 
+                                                navController.navigate("chat/${Uri.encode(model.path)}") 
+                                            }
+                                        }
                                     },
                                     onNavigateToSettings = { navController.navigate("settings") },
                                     onNavigateToUpgrade = { navController.navigate("upgrade") }
@@ -166,6 +186,24 @@ class MainActivity : ComponentActivity() {
                                     onStopGeneration = { chatVm.stopGeneration() },
                                     onDismissError = { chatVm.dismissError() },
                                     onNavigateToSettings = { navController.navigate("settings") }
+                                )
+                            }
+
+                            composable("ask_image/{modelPath}") { backStackEntry ->
+                                val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
+                                AskImageScreen(
+                                    modelPath = modelPath,
+                                    factory = factory,
+                                    onNavigateBack = { navController.popBackStack() }
+                                )
+                            }
+
+                            composable("prompt_lab/{modelPath}") { backStackEntry ->
+                                val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
+                                PromptLabScreen(
+                                    modelPath = modelPath,
+                                    factory = factory,
+                                    onNavigateBack = { navController.popBackStack() }
                                 )
                             }
 

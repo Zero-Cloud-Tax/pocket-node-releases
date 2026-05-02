@@ -7,6 +7,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -46,6 +47,42 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+data class ParsedMessage(val thought: String?, val text: String)
+
+fun parseThinking(content: String): ParsedMessage {
+    val thinkStart = "<think>"
+    val thinkEnd = "</think>"
+    
+    var text = ""
+    var thought = ""
+    
+    var currentIndex = 0
+    while (currentIndex < content.length) {
+        val startIndex = content.indexOf(thinkStart, currentIndex)
+        if (startIndex == -1) {
+            text += content.substring(currentIndex)
+            break
+        }
+        
+        text += content.substring(currentIndex, startIndex)
+        
+        val endIndex = content.indexOf(thinkEnd, startIndex + thinkStart.length)
+        if (endIndex == -1) {
+            // No closing tag
+            thought += content.substring(startIndex + thinkStart.length)
+            break
+        } else {
+            thought += content.substring(startIndex + thinkStart.length, endIndex) + "\n\n"
+            currentIndex = endIndex + thinkEnd.length
+        }
+    }
+    
+    return ParsedMessage(
+        thought = if (thought.isNotBlank()) thought.trim() else null,
+        text = text.trim()
+    )
+}
 
 @Composable
 fun ChatScreen(
@@ -274,8 +311,12 @@ fun ChatBubble(message: ChatMessage) {
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val clipboardManager = LocalClipboardManager.current
 
+    val parsed = if (!isUser) parseThinking(message.content) else ParsedMessage(null, message.content)
+
     val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
     val timeLabel = remember(message.timestamp) { timeFormat.format(Date(message.timestamp)) }
+
+    var showThought by remember { mutableStateOf(false) }
 
     val bubbleColor = if (isUser) {
         Brush.linearGradient(
@@ -316,28 +357,68 @@ fun ChatBubble(message: ChatMessage) {
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
-            Box(
-                modifier = Modifier
-                    .widthIn(max = 280.dp)
-                    .clip(shape)
-                    .background(bubbleColor)
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { clipboardManager.setText(AnnotatedString(message.content)) }
-                    )
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                if (!isUser) {
-                    MarkdownText(
-                        markdown = message.content,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                } else {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
+            Column(horizontalAlignment = alignment) {
+                if (parsed.thought != null) {
+                    Surface(
+                        modifier = Modifier
+                            .widthIn(max = 280.dp)
+                            .padding(bottom = 4.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { showThought = !showThought },
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Description,
+                                    contentDescription = "Thinking",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Model Notes",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            
+                            AnimatedVisibility(visible = showThought) {
+                                MarkdownText(
+                                    markdown = parsed.thought,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (parsed.text.isNotBlank() || parsed.thought == null) {
+                    Box(
+                        modifier = Modifier
+                            .widthIn(max = 280.dp)
+                            .clip(shape)
+                            .background(bubbleColor)
+                            .combinedClickable(
+                                onClick = {},
+                                onLongClick = { clipboardManager.setText(AnnotatedString(parsed.text)) }
+                            )
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        if (!isUser) {
+                            MarkdownText(
+                                markdown = parsed.text,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        } else {
+                            Text(
+                                text = parsed.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                    }
                 }
             }
         }
