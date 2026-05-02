@@ -116,9 +116,16 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
                     setDownloadState(modelName, DownloadState.Downloading(progress))
                 }
                 DownloadManager.STATUS_SUCCESSFUL -> {
+                    val localUriStr = cursor.getString(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+                    val actualFile = if (localUriStr != null) {
+                        File(Uri.parse(localUriStr).path!!)
+                    } else {
+                        destFile
+                    }
+                    
                     setDownloadState(modelName, DownloadState.Importing)
                     activeDownloadIds.remove(downloadId)
-                    importFromPath(context, destFile, modelName)
+                    importFromPath(context, actualFile, modelName)
                     setDownloadState(modelName, DownloadState.Done)
                     return
                 }

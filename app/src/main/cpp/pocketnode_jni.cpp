@@ -5,12 +5,15 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <algorithm>
 
 #include "llama.h"
+#include "ggml-backend.h"
 #include "clip.h"
 #include "llava.h"
 #include <vector>
 #include <unordered_map>
+#include <sstream>
 
 #define TAG "PocketNode"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -46,6 +49,44 @@ static thread_local std::string g_last_error;
 // Track n_past per context
 static std::unordered_map<llama_context*, int> g_n_past;
 
+static bool has_gpu_backend() {
+    if (!llama_supports_gpu_offload()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::string backend_names() {
+    std::vector<std::string> names;
+    for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        if (!reg) continue;
+
+        const char *name = ggml_backend_reg_name(reg);
+        if (name && std::string(name) != "CPU") {
+            names.emplace_back(name);
+        }
+    }
+
+    if (names.empty()) {
+        return "CPU";
+    }
+
+    std::ostringstream out;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) out << ",";
+        out << names[i];
+    }
+    return out.str();
+}
+
 extern "C" {
 
 // =========================================================================
@@ -75,11 +116,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetLastError(
 JNIEXPORT jstring JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetBackendName(
         JNIEnv *env, jobject /* this */) {
-#ifdef GGML_VULKAN
-    return env->NewStringUTF("Vulkan");
-#else
-    return env->NewStringUTF("CPU");
-#endif
+    return env->NewStringUTF(backend_names().c_str());
 }
 
 // =========================================================================
@@ -158,7 +195,13 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
     LOGI("Loading model: %s (gpu_layers=%d)", path, n_gpu_layers);
 
     llama_model_params model_params = llama_model_default_params();
-    model_params.n_gpu_layers = n_gpu_layers;
+    const int effective_gpu_layers = has_gpu_backend() ? std::max(0, (int)n_gpu_layers) : 0;
+    if (n_gpu_layers > 0 && effective_gpu_layers == 0) {
+        LOGI("GPU layers requested, but no GPU backend is registered; loading on CPU");
+    }
+    model_params.n_gpu_layers = effective_gpu_layers;
+    model_params.use_mmap = true;
+    model_params.use_mlock = false;
 
     llama_model *model = llama_load_model_from_file(path, model_params);
     env->ReleaseStringUTFChars(model_path, path);

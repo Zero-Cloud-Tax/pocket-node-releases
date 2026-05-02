@@ -63,8 +63,8 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val edgeApiEnabled: StateFlow<Boolean> = _prefs.map { it[Keys.EDGE_API_ENABLED] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val gpuLayers: StateFlow<Int> = _prefs.map { it[Keys.GPU_LAYERS] ?: 10 }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 10)
+    val gpuLayers: StateFlow<Int> = _prefs.map { it[Keys.GPU_LAYERS] ?: 0 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     val apiKey: StateFlow<String> = _prefs.map { it[Keys.API_KEY] ?: "" }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")

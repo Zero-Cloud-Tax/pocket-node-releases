@@ -29,12 +29,14 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # Enable mmap so models stream from storage instead of loading fully into RAM
 set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
-# Vulkan GPU backend — only enabled when building locally on Windows with the SDK installed.
-# CI (Linux) builds CPU-only; Android uses device Vulkan drivers at runtime.
-if(CMAKE_HOST_WIN32)
+# Vulkan GPU backend. The Android target links against the device Vulkan loader
+# while shader generation uses the host Vulkan SDK.
+option(POCKETNODE_ENABLE_VULKAN "Build llama.cpp with Vulkan GPU offload" ON)
+
+if(POCKETNODE_ENABLE_VULKAN AND CMAKE_HOST_WIN32 AND EXISTS "C:/VulkanSDK/1.4.341.1")
     set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
+    set(ENV{VULKAN_SDK} "${VULKAN_SDK}")
     set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
-    set(_ggml_vk_genshaders_cmd "${VULKAN_SDK}/Bin/vulkan-shaders-gen.exe" CACHE STRING "" FORCE)
     include_directories("${VULKAN_SDK}/Include")
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 else()
@@ -54,13 +56,14 @@ add_library(pocketnode SHARED
 
 target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/include
+    ${llama_cpp_SOURCE_DIR}/ggml/include
     ${llama_cpp_SOURCE_DIR}/examples/llava
     ${llama_cpp_SOURCE_DIR}/common
-    "${VULKAN_SDK}/Include"
 )
 
-# Also ensure ggml-vulkan sees the Vulkan headers if needed
-include_directories("${VULKAN_SDK}/Include")
+if(DEFINED VULKAN_SDK)
+    target_include_directories(pocketnode PRIVATE "${VULKAN_SDK}/Include")
+endif()
 
 target_link_libraries(pocketnode
     llama

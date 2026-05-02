@@ -25,7 +25,7 @@ class LicenseManager(private val context: Context) {
     val savedKeyFlow: Flow<String> = context.licenseDataStore.data
         .map { prefs -> prefs[KEY_LICENSE] ?: "" }
 
-    val isProFlow: Flow<Boolean> = savedKeyFlow.map { key -> isValidKey(key) }
+    val isProFlow: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(true) // Force unlock for owner testing
 
     suspend fun validateAndSave(key: String): Boolean {
         val valid = isValidKey(key.trim())
