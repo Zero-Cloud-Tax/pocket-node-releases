@@ -43,10 +43,10 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
     fun downloadModel(context: Context, remoteModel: RemoteModel) {
         val appContext = context.applicationContext
 
-        // Storage Validation: Require at least 5GB of free space
+        // Storage Validation: Require at least 2GB of free space for demo
         val dataDir = Environment.getDataDirectory()
-        if (dataDir.usableSpace < 5L * 1024 * 1024 * 1024) {
-            setDownloadState(remoteModel.name, DownloadState.Error("Not enough storage space (5GB req)"))
+        if (dataDir.usableSpace < 2L * 1024 * 1024 * 1024) {
+            setDownloadState(remoteModel.name, DownloadState.Error("Not enough storage space (2GB req)"))
             return
         }
 
