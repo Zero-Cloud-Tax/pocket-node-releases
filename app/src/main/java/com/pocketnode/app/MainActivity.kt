@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -57,6 +58,39 @@ class MainActivity : ComponentActivity() {
             var isDarkTheme by rememberSaveable { mutableStateOf(systemDark) }
 
             PocketNodeTheme(darkTheme = isDarkTheme) {
+                var showUpdateDialog by remember { mutableStateOf(false) }
+                var updateInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
+                val context = LocalContext.current
+
+                LaunchedEffect(Unit) {
+                    val info = com.pocketnode.app.updater.AppUpdater.checkForUpdate(context)
+                    if (info != null) {
+                        updateInfo = info
+                        showUpdateDialog = true
+                    }
+                }
+
+                if (showUpdateDialog && updateInfo != null) {
+                    AlertDialog(
+                        onDismissRequest = { showUpdateDialog = false },
+                        title = { Text("Update Available") },
+                        text = { Text("Version ${updateInfo!!.first} of Pocket Node is now available. Would you like to download and install it?") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                com.pocketnode.app.updater.AppUpdater.downloadAndInstall(context, updateInfo!!.second, updateInfo!!.first)
+                                showUpdateDialog = false
+                            }) {
+                                Text("Update")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showUpdateDialog = false }) {
+                                Text("Later")
+                            }
+                        }
+                    )
+                }
+
                 val navController = rememberNavController()
                 val factory = ViewModelFactory(app, modelManager, chatRepository, capturedSettingsDataStore)
 
