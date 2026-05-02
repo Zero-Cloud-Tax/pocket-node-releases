@@ -40,11 +40,18 @@ jobs:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
         run: echo "$KEYSTORE_B64" | tr -d '\n\r ' | base64 --decode > app/release.keystore
 
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-$(lsb_release -cs).list http://packages.lunarg.com/vulkan/lunarg-vulkan-$(lsb_release -cs).list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease -PGGML_VULKAN=OFF
+        run: ./gradlew assembleRelease -PGGML_VULKAN=ON
 
       - name: Rename APK
         run: mv app/build/outputs/apk/release/app-release.apk PocketNodeLite.apk
