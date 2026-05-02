@@ -29,9 +29,10 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # Enable mmap so models stream from storage instead of loading fully into RAM
 set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
-# Vulkan GPU backend. The Android target links against the device Vulkan loader
-# while shader generation uses the host Vulkan SDK.
-option(POCKETNODE_ENABLE_VULKAN "Build llama.cpp with Vulkan GPU offload" ON)
+# Vulkan can crash inside some OTA-updated Adreno/Samsung drivers during
+# backend initialization, even when the app requests zero GPU layers. Keep
+# the phone build CPU-only unless this is explicitly enabled for testing.
+option(POCKETNODE_ENABLE_VULKAN "Build llama.cpp with Vulkan GPU offload" OFF)
 
 if(POCKETNODE_ENABLE_VULKAN AND CMAKE_HOST_WIN32 AND EXISTS "C:/VulkanSDK/1.4.341.1")
     set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
