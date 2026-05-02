@@ -63,7 +63,7 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val edgeApiEnabled: StateFlow<Boolean> = _prefs.map { it[Keys.EDGE_API_ENABLED] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    val gpuLayers: StateFlow<Int> = _prefs.map { it[Keys.GPU_LAYERS] ?: 0 }
+    val gpuLayers: StateFlow<Int> = _prefs.map { 0 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     val apiKey: StateFlow<String> = _prefs.map { it[Keys.API_KEY] ?: "" }
@@ -86,7 +86,7 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     fun setSystemPrompt(v: String) = save { it[Keys.SYSTEM_PROMPT] = v }
     fun setTemplateName(v: String) = save { it[Keys.TEMPLATE_NAME] = v }
     fun setEdgeApiEnabled(v: Boolean) = save { it[Keys.EDGE_API_ENABLED] = v }
-    fun setGpuLayers(v: Int) = save { it[Keys.GPU_LAYERS] = v }
+    fun setGpuLayers(v: Int) = save { it[Keys.GPU_LAYERS] = 0 }
     fun setApiKey(v: String) = save { it[Keys.API_KEY] = v }
 
     private fun save(block: (MutablePreferences) -> Unit) {

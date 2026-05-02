@@ -20,6 +20,8 @@ import java.net.URL
 object AppUpdater {
     private const val TAG = "AppUpdater"
     private const val GITHUB_API_URL = "https://api.github.com/repos/Zero-Cloud-Tax/pocket-node-releases/releases/latest"
+    private const val PREFS_NAME = "app_updater"
+    private const val KEY_DISMISSED_VERSION = "dismissed_version"
 
     // Returns a Pair of (Version String, Download URL) if an update is available.
     suspend fun checkForUpdate(context: Context): Pair<String, String>? = withContext(Dispatchers.IO) {
@@ -41,13 +43,19 @@ object AppUpdater {
                 }
 
                 val currentVersion = try {
-                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.0.0"
                 } catch (e: Exception) {
                     "0.0.0"
                 }
                 
-                // Compare versions. A more robust comparison is possible, but this handles simple "1.0.1" != "1.0.2"
-                if (tagName != currentVersion) {
+                if (isRemoteVersionNewer(tagName, currentVersion)) {
+                    val dismissedVersion = context
+                        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .getString(KEY_DISMISSED_VERSION, null)
+                    if (dismissedVersion == tagName) {
+                        return@withContext null
+                    }
+
                     val assets = json.getJSONArray("assets")
                     for (i in 0 until assets.length()) {
                         val asset = assets.getJSONObject(i)
@@ -63,6 +71,37 @@ object AppUpdater {
             Log.e(TAG, "Failed to check for updates", e)
         }
         return@withContext null
+    }
+
+    private fun isRemoteVersionNewer(remoteVersion: String, currentVersion: String): Boolean {
+        val remoteParts = versionParts(remoteVersion) ?: return false
+        val currentParts = versionParts(currentVersion) ?: return false
+        val maxSize = maxOf(remoteParts.size, currentParts.size)
+
+        for (i in 0 until maxSize) {
+            val remotePart = remoteParts.getOrElse(i) { 0 }
+            val currentPart = currentParts.getOrElse(i) { 0 }
+            if (remotePart > currentPart) return true
+            if (remotePart < currentPart) return false
+        }
+
+        return false
+    }
+
+    private fun versionParts(version: String): List<Int>? {
+        val parts = Regex("""\d+""")
+            .findAll(version)
+            .mapNotNull { it.value.toIntOrNull() }
+            .toList()
+
+        return parts.ifEmpty { null }
+    }
+
+    fun dismissVersion(context: Context, version: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_DISMISSED_VERSION, version)
+            .apply()
     }
 
     fun downloadAndInstall(context: Context, url: String, version: String) {

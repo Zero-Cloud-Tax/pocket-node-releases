@@ -1,6 +1,7 @@
 package com.pocketnode.app
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -63,10 +64,13 @@ class MainActivity : ComponentActivity() {
                 val context = LocalContext.current
 
                 LaunchedEffect(Unit) {
-                    val info = com.pocketnode.app.updater.AppUpdater.checkForUpdate(context)
-                    if (info != null) {
-                        updateInfo = info
-                        showUpdateDialog = true
+                    val isDebuggable = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+                    if (!isDebuggable) {
+                        val info = com.pocketnode.app.updater.AppUpdater.checkForUpdate(context)
+                        if (info != null) {
+                            updateInfo = info
+                            showUpdateDialog = true
+                        }
                     }
                 }
 
@@ -84,7 +88,10 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { showUpdateDialog = false }) {
+                            TextButton(onClick = {
+                                com.pocketnode.app.updater.AppUpdater.dismissVersion(context, updateInfo!!.first)
+                                showUpdateDialog = false
+                            }) {
                                 Text("Later")
                             }
                         }
