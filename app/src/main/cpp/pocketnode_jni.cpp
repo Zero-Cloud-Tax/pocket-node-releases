@@ -49,6 +49,16 @@ static std::unordered_map<llama_context*, int> g_n_past;
 extern "C" {
 
 // =========================================================================
+// Initialization
+// =========================================================================
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    LOGI("JNI_OnLoad called, initializing llama backend");
+    llama_backend_init();
+    return JNI_VERSION_1_6;
+}
+
+// =========================================================================
 // Error reporting
 // =========================================================================
 
