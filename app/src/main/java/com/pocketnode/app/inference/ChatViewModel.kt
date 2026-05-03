@@ -74,14 +74,21 @@ class ChatViewModel(
             // Resolve content:// URI → /proc/self/fd/<N>, or use the path directly
             val isContentUri = modelPath.startsWith("content://")
             val (effectivePath, newFd) = if (isContentUri) {
-                val pfd = app.contentResolver.openFileDescriptor(Uri.parse(modelPath), "r")
-                    ?: run {
-                        withContext(Dispatchers.Main) {
-                            modelError.value = "Cannot open model file descriptor."
-                            isLoadingModel.value = false
-                        }
-                        return@launch
+                val pfd = try {
+                    app.contentResolver.openFileDescriptor(Uri.parse(modelPath), "r")
+                } catch (_: SecurityException) {
+                    withContext(Dispatchers.Main) {
+                        modelError.value = "Android no longer allows access to this imported model. Re-import it from Model Hub so Pocket Node can copy it locally."
+                        isLoadingModel.value = false
                     }
+                    return@launch
+                } ?: run {
+                    withContext(Dispatchers.Main) {
+                        modelError.value = "Cannot open model file descriptor."
+                        isLoadingModel.value = false
+                    }
+                    return@launch
+                }
                 val fd = pfd.detachFd()
                 Pair("/proc/self/fd/$fd", fd)
             } else {
