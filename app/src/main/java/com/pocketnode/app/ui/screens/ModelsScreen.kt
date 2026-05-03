@@ -46,6 +46,10 @@ fun ModelsScreen(
     var showUrlDialog by remember { mutableStateOf(false) }
     var downloadUrl by remember { mutableStateOf("") }
 
+    LaunchedEffect(Unit) {
+        viewModel.importCompletedDownloads(context)
+    }
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri -> uri?.let { viewModel.importModel(context, it) } }
