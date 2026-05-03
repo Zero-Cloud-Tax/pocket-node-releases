@@ -3,11 +3,15 @@ package com.pocketnode.app.data
 import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.inference.PromptTemplate
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 class ChatRepository(private val chatDao: ChatDao) {
 
     fun getMessages(conversationId: Long): Flow<List<ChatMessage>> =
         chatDao.getMessagesForConversation(conversationId)
+
+    suspend fun getMessagesSnapshot(conversationId: Long): List<ChatMessage> =
+        chatDao.getMessagesForConversation(conversationId).first()
 
     suspend fun saveMessage(message: ChatMessage): Long =
         chatDao.insertMessage(message)

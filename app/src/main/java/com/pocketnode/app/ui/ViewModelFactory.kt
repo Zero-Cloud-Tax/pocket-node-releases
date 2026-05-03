@@ -16,7 +16,8 @@ class ViewModelFactory(
     private val app: MainApplication,
     private val modelManager: ModelManager? = null,
     private val chatRepository: ChatRepository? = null,
-    private val settingsDataStore: DataStore<Preferences>? = null
+    private val settingsDataStore: DataStore<Preferences>? = null,
+    private val defaultConversationId: Long = ChatViewModel.DEFAULT_CONVERSATION_ID
 ) : ViewModelProvider.Factory {
 
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -25,7 +26,7 @@ class ViewModelFactory(
                 ModelsViewModel(modelManager!!) as T
 
             modelClass.isAssignableFrom(ChatViewModel::class.java) ->
-                ChatViewModel(app.inference, chatRepository!!, app) as T
+                ChatViewModel(app.inference, chatRepository!!, app, defaultConversationId) as T
 
             modelClass.isAssignableFrom(SettingsViewModel::class.java) ->
                 SettingsViewModel(settingsDataStore!!) as T

@@ -10,11 +10,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,10 +26,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.PromptTemplate
-import com.pocketnode.app.ui.ViewModelFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,14 +37,17 @@ import java.io.ByteArrayOutputStream
 @Composable
 fun AskImageScreen(
     modelPath: String,
-    factory: ViewModelFactory,
+    contextSize: Int,
+    threadCount: Int,
+    gpuLayers: Int,
+    maxTokens: Int,
+    chatVm: ChatViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val chatVm: ChatViewModel = viewModel(factory = factory)
-    
     val isModelReady by chatVm.isModelReady
-    val isGenerating by chatVm.isGenerating
-    val response by chatVm.currentAssistantMessage
+    val isGenerating by chatVm.visibleIsGenerating
+    val response by chatVm.visibleAssistantMessage
+    val modelError by chatVm.modelError
     
     var prompt by remember { mutableStateOf("Describe this image in detail.") }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -67,7 +70,7 @@ fun AskImageScreen(
                     if (bitmap != null) {
                         selectedBitmap = bitmap
                         // Scale down for inference if needed
-                        val maxDim = 512f
+                        val maxDim = 384f
                         val scale = Math.min(maxDim / bitmap.width.toFloat(), maxDim / bitmap.height.toFloat())
                         val finalBitmap = if (scale < 1f) {
                             Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
@@ -82,9 +85,16 @@ fun AskImageScreen(
         }
     }
 
-    LaunchedEffect(modelPath) {
+    LaunchedEffect(modelPath, contextSize, threadCount, gpuLayers) {
+        chatVm.bindConversation(ChatViewModel.ASK_IMAGE_CONVERSATION_ID)
         if (modelPath.isNotBlank()) {
-            chatVm.loadModel(modelPath, 2048, 4, 0) // Default settings
+            chatVm.loadModel(
+                modelPath = modelPath,
+                contextSize = contextSize,
+                threadCount = threadCount,
+                nGpuLayers = gpuLayers,
+                reloadIfConfigChanged = false
+            )
         }
     }
 
@@ -105,6 +115,33 @@ fun AskImageScreen(
             if (!isModelReady) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text("Loading vision model...", style = MaterialTheme.typography.bodySmall)
+            }
+
+            if (modelError != null) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = modelError.orEmpty(),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        IconButton(onClick = { chatVm.dismissError() }) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Dismiss error",
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
             }
             
             // Image Preview Area
@@ -160,11 +197,11 @@ fun AskImageScreen(
             Button(
                 onClick = {
                     if (prompt.isNotBlank() && selectedImageBytes != null && isModelReady) {
-                        chatVm.clearChat(0L)
                         chatVm.sendMessage(
                             text = prompt,
                             imageBytes = selectedImageBytes,
-                            conversationId = 0L,
+                            conversationId = ChatViewModel.ASK_IMAGE_CONVERSATION_ID,
+                            clearConversationFirst = true,
                             temp = 0.7f,
                             topP = 0.9f,
                             topK = 40,
@@ -193,8 +230,18 @@ fun AskImageScreen(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Analysis", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.height(8.dp))
-                        SelectionContainer {
-                            MarkdownText(markdown = fullResponse, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (isGenerating) {
+                            DisableSelection {
+                                Text(
+                                    text = fullResponse,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            SelectionContainer {
+                                MarkdownText(markdown = fullResponse, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }

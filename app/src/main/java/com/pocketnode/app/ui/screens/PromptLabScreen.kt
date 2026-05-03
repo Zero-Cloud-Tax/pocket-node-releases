@@ -2,6 +2,7 @@ package com.pocketnode.app.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,20 +16,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.PromptTemplate
-import com.pocketnode.app.ui.ViewModelFactory
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PromptLabScreen(
     modelPath: String,
-    factory: ViewModelFactory,
+    chatVm: ChatViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val chatVm: ChatViewModel = viewModel(factory = factory)
-    
     // Parameters
     var systemPrompt by remember { mutableStateOf("You are a helpful AI assistant.") }
     var userPrompt by remember { mutableStateOf("") }
@@ -38,14 +35,21 @@ fun PromptLabScreen(
     var maxTokens by remember { mutableStateOf(512f) }
     
     val isModelReady by chatVm.isModelReady
-    val isGenerating by chatVm.isGenerating
-    val response by chatVm.currentAssistantMessage
+    val isGenerating by chatVm.visibleIsGenerating
+    val response by chatVm.visibleAssistantMessage
     
     val clipboardManager = LocalClipboardManager.current
     
     LaunchedEffect(modelPath) {
+        chatVm.bindConversation(ChatViewModel.PROMPT_LAB_CONVERSATION_ID)
         if (modelPath.isNotBlank()) {
-            chatVm.loadModel(modelPath, 2048, 4, 0) // Default settings for lab initially
+            chatVm.loadModel(
+                modelPath = modelPath,
+                contextSize = 2048,
+                threadCount = 4,
+                nGpuLayers = 0,
+                reloadIfConfigChanged = false
+            )
         }
     }
 
@@ -61,12 +65,11 @@ fun PromptLabScreen(
                     } else {
                         IconButton(onClick = { 
                             if (userPrompt.isNotBlank() && isModelReady) {
-                                // For prompt lab, we can clear chat and send as a fresh conversation each time
-                                chatVm.clearChat(0L)
                                 chatVm.sendMessage(
                                     text = userPrompt,
                                     imageBytes = null,
-                                    conversationId = 0L,
+                                    conversationId = ChatViewModel.PROMPT_LAB_CONVERSATION_ID,
+                                    clearConversationFirst = true,
                                     temp = temperature,
                                     topP = topP,
                                     topK = topK.toInt(),
@@ -161,8 +164,18 @@ fun PromptLabScreen(
                             }
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        SelectionContainer {
-                            MarkdownText(markdown = fullResponse, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (isGenerating) {
+                            DisableSelection {
+                                Text(
+                                    text = fullResponse,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            SelectionContainer {
+                                MarkdownText(markdown = fullResponse, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }

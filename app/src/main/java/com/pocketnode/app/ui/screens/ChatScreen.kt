@@ -259,12 +259,13 @@ fun ChatScreen(
                 if (isGenerating && currentAssistantMessage.isNotEmpty()) {
                     item {
                         ChatBubble(
-                            ChatMessage(
+                            message = ChatMessage(
                                 conversationId = 0,
                                 role = "assistant",
                                 content = currentAssistantMessage,
                                 timestamp = System.currentTimeMillis()
-                            )
+                            ),
+                            renderMarkdown = false
                         )
                     }
                 }
@@ -307,6 +308,12 @@ fun ChatScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatBubble(message: ChatMessage) {
+    ChatBubble(message = message, renderMarkdown = true)
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean) {
     val isUser = message.role == "user"
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val clipboardManager = LocalClipboardManager.current
@@ -406,9 +413,15 @@ fun ChatBubble(message: ChatMessage) {
                             )
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
-                        if (!isUser) {
+                        if (!isUser && renderMarkdown) {
                             MarkdownText(
                                 markdown = parsed.text,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        } else if (!isUser) {
+                            Text(
+                                text = parsed.text,
+                                style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                         } else {

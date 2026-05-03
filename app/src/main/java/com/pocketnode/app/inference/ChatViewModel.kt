@@ -12,20 +12,27 @@ import com.pocketnode.app.MainApplication
 import com.pocketnode.app.data.ChatRepository
 import com.pocketnode.app.data.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class ChatViewModel(
     private val inference: LlamaInference,
     private val repository: ChatRepository,
-    private val app: MainApplication
+    private val app: MainApplication,
+    private val defaultConversationId: Long = DEFAULT_CONVERSATION_ID
 ) : ViewModel() {
 
     companion object {
-        private const val DEFAULT_CONVERSATION_ID = 1L
+        const val DEFAULT_CONVERSATION_ID = 1L
+        const val ASK_IMAGE_CONVERSATION_ID = 2L
+        const val PROMPT_LAB_CONVERSATION_ID = 3L
         private const val DEFAULT_CONTEXT_SIZE = 4096
+        private const val VISION_PROJECTOR_FILE_NAME = "mmproj-model-f16.gguf"
     }
 
     private var modelPtr = 0L
@@ -34,12 +41,18 @@ class ChatViewModel(
     private var loadedContextSize = 0
     private var loadedThreadCount = 0
     private var loadedGpuLayers = 0
+    private var activeConversationId = defaultConversationId
+    private var generatingConversationId: Long? = null
+    private var messagesJob: Job? = null
+    private val nativeSessionMutex = Mutex()
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
 
     val messages = mutableStateListOf<ChatMessage>()
     val isGenerating = mutableStateOf(false)
     val currentAssistantMessage = mutableStateOf("")
+    val visibleIsGenerating = mutableStateOf(false)
+    val visibleAssistantMessage = mutableStateOf("")
     val isLoadingModel = mutableStateOf(false)
     val isModelReady = mutableStateOf(false)
     val modelName = mutableStateOf<String?>(null)
@@ -47,21 +60,36 @@ class ChatViewModel(
     val backendName = mutableStateOf("CPU")
 
     init {
-        viewModelScope.launch {
-            repository.getMessages(DEFAULT_CONVERSATION_ID).collectLatest { history ->
+        bindConversation(defaultConversationId)
+        backendName.value = try { inference.nativeGetBackendName() } catch (_: Throwable) { "CPU" }
+    }
+
+    fun bindConversation(conversationId: Long) {
+        if (activeConversationId == conversationId && messagesJob != null) return
+
+        activeConversationId = conversationId
+        messagesJob?.cancel()
+        messagesJob = viewModelScope.launch {
+            repository.getMessages(conversationId).collectLatest { history ->
                 messages.clear()
                 messages.addAll(history)
             }
         }
-        backendName.value = try { inference.nativeGetBackendName() } catch (_: Throwable) { "CPU" }
+        syncVisibleGenerationState()
+        modelError.value = null
     }
 
     fun loadModel(
         modelPath: String,
         contextSize: Int = DEFAULT_CONTEXT_SIZE,
         threadCount: Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 6),
-        nGpuLayers: Int = 0
+        nGpuLayers: Int = 0,
+        reloadIfConfigChanged: Boolean = true
     ) {
+        if (loadedModelPath == modelPath && contextPtr != 0L && !reloadIfConfigChanged) {
+            return
+        }
+
         if (
             loadedModelPath == modelPath &&
             loadedContextSize == contextSize &&
@@ -128,41 +156,43 @@ class ChatViewModel(
             var nextContextPtr = 0L
 
             try {
-                if (contextPtr != 0L) {
-                    inference.nativeFreeContext(contextPtr)
-                    contextPtr = 0L
-                }
-                if (modelPtr != 0L) {
-                    inference.nativeFreeModel(modelPtr)
-                    modelPtr = 0L
-                }
-                // Close previous FD if switching from a content:// URI model
-                closeFdIfNeeded()
-                rawFd = newFd
-                app.activeSession = null
+                nativeSessionMutex.withLock {
+                    if (contextPtr != 0L) {
+                        inference.nativeFreeContext(contextPtr)
+                        contextPtr = 0L
+                    }
+                    if (modelPtr != 0L) {
+                        inference.nativeFreeModel(modelPtr)
+                        modelPtr = 0L
+                    }
+                    // Close previous FD if switching from a content:// URI model
+                    closeFdIfNeeded()
+                    rawFd = newFd
+                    app.activeSession = null
 
-                nextModelPtr = inference.nativeLoadModel(effectivePath, nGpuLayers)
-                if (nextModelPtr == 0L) {
-                    throw RuntimeException(
-                        inference.nativeGetLastError().ifBlank { "Unable to load the selected model." }
-                    )
+                    nextModelPtr = inference.nativeLoadModel(effectivePath, nGpuLayers)
+                    if (nextModelPtr == 0L) {
+                        throw RuntimeException(
+                            inference.nativeGetLastError().ifBlank { "Unable to load the selected model." }
+                        )
+                    }
+
+                    nextContextPtr = inference.nativeCreateContext(nextModelPtr, contextSize, threadCount)
+                    if (nextContextPtr == 0L) {
+                        throw RuntimeException(
+                            inference.nativeGetLastError().ifBlank { "Unable to create inference context." }
+                        )
+                    }
+
+                    modelPtr = nextModelPtr
+                    contextPtr = nextContextPtr
+                    loadedModelPath = modelPath
+                    loadedContextSize = contextSize
+                    loadedThreadCount = threadCount
+                    loadedGpuLayers = nGpuLayers
+
+                    app.activeSession = InferenceSession(contextPtr, displayName)
                 }
-
-                nextContextPtr = inference.nativeCreateContext(nextModelPtr, contextSize, threadCount)
-                if (nextContextPtr == 0L) {
-                    throw RuntimeException(
-                        inference.nativeGetLastError().ifBlank { "Unable to create inference context." }
-                    )
-                }
-
-                modelPtr = nextModelPtr
-                contextPtr = nextContextPtr
-                loadedModelPath = modelPath
-                loadedContextSize = contextSize
-                loadedThreadCount = threadCount
-                loadedGpuLayers = nGpuLayers
-
-                app.activeSession = InferenceSession(contextPtr, displayName)
 
                 withContext(Dispatchers.Main) {
                     isModelReady.value = true
@@ -183,6 +213,10 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    fun isLoadedModel(modelPath: String?): Boolean {
+        return !modelPath.isNullOrBlank() && loadedModelPath == modelPath && contextPtr != 0L
     }
 
     private fun closeFdIfNeeded() {
@@ -206,7 +240,8 @@ class ChatViewModel(
     fun sendMessage(
         text: String,
         imageBytes: ByteArray? = null,
-        conversationId: Long,
+        conversationId: Long = defaultConversationId,
+        clearConversationFirst: Boolean = false,
         temp: Float = 0.7f,
         topP: Float = 0.9f,
         topK: Int = 40,
@@ -219,22 +254,28 @@ class ChatViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (clearConversationFirst) {
+                    if (contextPtr != 0L && conversationId == activeConversationId) {
+                        inference.nativeClearCache(contextPtr)
+                    }
+                    repository.clearConversation(conversationId)
+                }
+
                 repository.saveMessage(
                     ChatMessage(conversationId = conversationId, role = "user", content = trimmedText)
                 )
 
                 withContext(Dispatchers.Main) {
+                    generatingConversationId = conversationId
                     isGenerating.value = true
                     currentAssistantMessage.value = ""
+                    syncVisibleGenerationState()
                     modelError.value = null
                 }
 
+                val conversationHistory = repository.getMessagesSnapshot(conversationId)
                 val fullPrompt = repository.buildContextString(
-                    messages = messages.toList() + ChatMessage(
-                        conversationId = conversationId,
-                        role = "user",
-                        content = trimmedText
-                    ),
+                    messages = conversationHistory,
                     systemPrompt = systemPrompt,
                     template = template
                 )
@@ -253,11 +294,12 @@ class ChatViewModel(
                         partialMessage += token
                         val now = System.currentTimeMillis()
                         
-                        // Batch UI updates every 50ms
-                        if (now - lastUiUpdateTime > 50) {
+                        // Throttle UI updates to reduce recomposition and rendering pressure.
+                        if (now - lastUiUpdateTime > 150) {
                             lastUiUpdateTime = now
                             viewModelScope.launch(Dispatchers.Main) {
                                 currentAssistantMessage.value = partialMessage
+                                syncVisibleGenerationState()
                             }
                         }
                         
@@ -276,22 +318,41 @@ class ChatViewModel(
                 var clipCtxPtr = 0L
                 var imageEmbedPtr = 0L
 
-                if (imageBytes != null) {
-                    val mmprojFile = File(app.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), "mmproj-model-f16.gguf")
-                    if (mmprojFile.exists()) {
-                        clipCtxPtr = inference.nativeLoadMmproj(mmprojFile.absolutePath)
-                        if (clipCtxPtr != 0L) {
-                            imageEmbedPtr = inference.nativeMakeImageEmbed(clipCtxPtr, imageBytes)
+                try {
+                    nativeSessionMutex.withLock {
+                        if (contextPtr == 0L) {
+                            throw IllegalStateException("Model context is no longer available.")
                         }
+
+                        if (imageBytes != null) {
+                            val mmprojFile = resolveVisionProjectorFile()
+                                ?: throw IllegalStateException(
+                                    "Missing vision projector file. Download or import mmproj-model-f16.gguf from Model Hub before using Ask Image."
+                                )
+
+                            clipCtxPtr = inference.nativeLoadMmproj(mmprojFile.absolutePath)
+                            if (clipCtxPtr == 0L) {
+                                throw IllegalStateException(
+                                    inference.nativeGetLastError().ifBlank { "Failed to load the vision projector model." }
+                                )
+                            }
+
+                            imageEmbedPtr = inference.nativeMakeImageEmbed(clipCtxPtr, imageBytes)
+                            if (imageEmbedPtr == 0L) {
+                                throw IllegalStateException(
+                                    inference.nativeGetLastError().ifBlank { "Failed to encode the selected image for this model." }
+                                )
+                            }
+                        }
+
+                        inference.nativeGenerate(
+                            contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f, callback
+                        )
                     }
+                } finally {
+                    if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
+                    if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
                 }
-
-                inference.nativeGenerate(
-                    contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f, callback
-                )
-
-                if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
-                if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
 
                 // Final save to DB
                 repository.updateMessage(
@@ -312,11 +373,19 @@ class ChatViewModel(
                 }
             } finally {
                 withContext(Dispatchers.Main) {
+                    generatingConversationId = null
                     currentAssistantMessage.value = ""
                     isGenerating.value = false
+                    syncVisibleGenerationState()
                 }
             }
         }
+    }
+
+    private fun syncVisibleGenerationState() {
+        val isVisibleConversation = generatingConversationId == activeConversationId
+        visibleIsGenerating.value = isGenerating.value && isVisibleConversation
+        visibleAssistantMessage.value = if (isVisibleConversation) currentAssistantMessage.value else ""
     }
 
     fun stopGeneration() {
@@ -329,16 +398,43 @@ class ChatViewModel(
 
     fun clearChat(conversationId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (contextPtr != 0L) {
+            if (contextPtr != 0L && conversationId == activeConversationId) {
                 inference.nativeClearCache(contextPtr)
             }
             repository.clearConversation(conversationId)
             withContext(Dispatchers.Main) {
-                messages.clear()
+                if (conversationId == activeConversationId) {
+                    messages.clear()
+                }
                 currentAssistantMessage.value = ""
                 isGenerating.value = false
             }
         }
+    }
+
+    private fun resolveVisionProjectorFile(): File? {
+        val downloadsDir = app.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val modelsDir = app.getExternalFilesDir(null)?.let { File(it, "models") }
+        val searchDirs = listOfNotNull(downloadsDir, modelsDir)
+
+        searchDirs.forEach { dir ->
+            val directMatch = File(dir, VISION_PROJECTOR_FILE_NAME)
+            if (directMatch.exists()) {
+                return directMatch
+            }
+        }
+
+        return searchDirs
+            .asSequence()
+            .flatMap { dir -> dir.listFiles().orEmpty().asSequence() }
+            .filter { it.isFile && it.extension.equals("gguf", ignoreCase = true) }
+            .sortedBy { it.name.lowercase() }
+            .firstOrNull { file ->
+                val normalizedName = file.name.lowercase()
+                normalizedName == VISION_PROJECTOR_FILE_NAME.lowercase() ||
+                    normalizedName.contains("mmproj") ||
+                    normalizedName.contains("projector")
+            }
     }
 
     override fun onCleared() {
@@ -350,6 +446,7 @@ class ChatViewModel(
         loadedContextSize = 0
         loadedThreadCount = 0
         loadedGpuLayers = 0
+        messagesJob?.cancel()
         closeFdIfNeeded()
     }
 }

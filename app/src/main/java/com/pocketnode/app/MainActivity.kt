@@ -100,6 +100,7 @@ class MainActivity : ComponentActivity() {
 
                 val navController = rememberNavController()
                 val factory = ViewModelFactory(app, modelManager, chatRepository, capturedSettingsDataStore)
+                val chatVm: ChatViewModel = viewModel(factory = factory)
 
                 val settingsVm: SettingsViewModel = viewModel(factory = factory)
                 val edgeApiEnabled by settingsVm.edgeApiEnabled.collectAsState()
@@ -184,7 +185,6 @@ class MainActivity : ComponentActivity() {
                                     ?.getString("modelPath")
                                     ?.let { Uri.decode(it) }
 
-                                val chatVm: ChatViewModel = viewModel(factory = factory)
                                 val temperature by settingsVm.temperature.collectAsState()
                                 val topP by settingsVm.topP.collectAsState()
                                 val topK by settingsVm.topK.collectAsState()
@@ -196,6 +196,7 @@ class MainActivity : ComponentActivity() {
                                 val template by settingsVm.selectedTemplate.collectAsState()
 
                                 LaunchedEffect(modelPath, contextSize, threadCount, gpuLayers) {
+                                    chatVm.bindConversation(ChatViewModel.DEFAULT_CONVERSATION_ID)
                                     modelPath?.let {
                                         chatVm.loadModel(it, contextSize, threadCount, gpuLayers)
                                     }
@@ -203,8 +204,8 @@ class MainActivity : ComponentActivity() {
 
                                 ChatScreen(
                                     messages = chatVm.messages,
-                                    currentAssistantMessage = chatVm.currentAssistantMessage.value,
-                                    isGenerating = chatVm.isGenerating.value,
+                                    currentAssistantMessage = chatVm.visibleAssistantMessage.value,
+                                    isGenerating = chatVm.visibleIsGenerating.value,
                                     isLoadingModel = chatVm.isLoadingModel.value,
                                     isModelReady = chatVm.isModelReady.value,
                                     modelName = chatVm.modelName.value,
@@ -215,6 +216,7 @@ class MainActivity : ComponentActivity() {
                                             text = text,
                                             imageBytes = imageBytes,
                                             conversationId = 1L,
+                                            clearConversationFirst = false,
                                             temp = temperature,
                                             topP = topP,
                                             topK = topK,
@@ -232,9 +234,17 @@ class MainActivity : ComponentActivity() {
 
                             composable("ask_image/{modelPath}") { backStackEntry ->
                                 val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
+                                val contextSize by settingsVm.contextSize.collectAsState()
+                                val threadCount by settingsVm.threadCount.collectAsState()
+                                val gpuLayers by settingsVm.gpuLayers.collectAsState()
+                                val maxTokens by settingsVm.maxTokens.collectAsState()
                                 AskImageScreen(
                                     modelPath = modelPath,
-                                    factory = factory,
+                                    contextSize = contextSize,
+                                    threadCount = threadCount,
+                                    gpuLayers = gpuLayers,
+                                    maxTokens = maxTokens,
+                                    chatVm = chatVm,
                                     onNavigateBack = { navController.popBackStack() }
                                 )
                             }
@@ -243,7 +253,7 @@ class MainActivity : ComponentActivity() {
                                 val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
                                 PromptLabScreen(
                                     modelPath = modelPath,
-                                    factory = factory,
+                                    chatVm = chatVm,
                                     onNavigateBack = { navController.popBackStack() }
                                 )
                             }
