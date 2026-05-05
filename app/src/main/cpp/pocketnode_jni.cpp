@@ -387,6 +387,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 
     // Set up sampler chain
     llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));

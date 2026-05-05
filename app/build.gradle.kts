@@ -42,6 +42,11 @@ android {
                 arguments += "-DPOCKETNODE_ENABLE_VULKAN=OFF"
             }
         }
+
+        val proSecret = System.getenv("POCKETNODE_PRO_HMAC_SECRET") ?: "dev-only-secret-change-me"
+        val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
+        buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
+        buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
     }
 
     buildTypes {
@@ -67,6 +72,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     externalNativeBuild {
@@ -127,4 +133,6 @@ dependencies {
 
     // PDF Parsing
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

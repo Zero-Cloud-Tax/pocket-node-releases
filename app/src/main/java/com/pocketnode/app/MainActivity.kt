@@ -29,6 +29,7 @@ import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.GenerationService
 import com.pocketnode.app.ui.ViewModelFactory
 import com.pocketnode.app.ui.screens.ChatScreen
+import com.pocketnode.app.ui.screens.ConversationListScreen
 import com.pocketnode.app.ui.screens.ModelsScreen
 import com.pocketnode.app.ui.screens.ModelsViewModel
 import com.pocketnode.app.ui.screens.SettingsScreen
@@ -60,7 +61,7 @@ class MainActivity : ComponentActivity() {
 
             PocketNodeTheme(darkTheme = isDarkTheme) {
                 var showUpdateDialog by remember { mutableStateOf(false) }
-                var updateInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
+                var updateInfo by remember { mutableStateOf<com.pocketnode.app.updater.AppUpdater.UpdateInfo?>(null) }
                 val context = LocalContext.current
 
                 LaunchedEffect(Unit) {
@@ -78,10 +79,10 @@ class MainActivity : ComponentActivity() {
                     AlertDialog(
                         onDismissRequest = { showUpdateDialog = false },
                         title = { Text("Update Available") },
-                        text = { Text("Version ${updateInfo!!.first} of Pocket Node is now available. Would you like to download and install it?") },
+                        text = { Text("Version ${updateInfo!!.version} of Pocket Node is now available. Would you like to download and install it?") },
                         confirmButton = {
                             TextButton(onClick = {
-                                com.pocketnode.app.updater.AppUpdater.downloadAndInstall(context, updateInfo!!.second, updateInfo!!.first)
+                                com.pocketnode.app.updater.AppUpdater.downloadAndInstall(context, updateInfo!!)
                                 showUpdateDialog = false
                             }) {
                                 Text("Update")
@@ -89,7 +90,7 @@ class MainActivity : ComponentActivity() {
                         },
                         dismissButton = {
                             TextButton(onClick = {
-                                com.pocketnode.app.updater.AppUpdater.dismissVersion(context, updateInfo!!.first)
+                                com.pocketnode.app.updater.AppUpdater.dismissVersion(context, updateInfo!!.version)
                                 showUpdateDialog = false
                             }) {
                                 Text("Later")
@@ -126,6 +127,7 @@ class MainActivity : ComponentActivity() {
                     currentRoute.startsWith("ask_image") -> "Ask Image"
                     currentRoute.startsWith("prompt_lab") -> "Prompt Lab"
                     currentRoute.startsWith("models") -> "Model Hub"
+                    currentRoute.startsWith("conversations") -> "Conversations"
                     currentRoute == "settings" -> "Settings"
                     currentRoute == "upgrade" -> "Go Pro"
                     else -> "Pocket Node"
@@ -167,11 +169,11 @@ class MainActivity : ComponentActivity() {
                                     isPro = isPro,
                                     onModelSelected = { model ->
                                         when (mode) {
-                                            "chat" -> navController.navigate("chat/${Uri.encode(model.path)}")
+                                            "chat" -> navController.navigate("chat/${Uri.encode(model.path)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}")
                                             "ask_image" -> navController.navigate("ask_image/${Uri.encode(model.path)}")
                                             "prompt_lab" -> navController.navigate("prompt_lab/${Uri.encode(model.path)}")
                                             else -> { /* In manage mode, maybe just show details or go to chat as default */ 
-                                                navController.navigate("chat/${Uri.encode(model.path)}") 
+                                                navController.navigate("chat/${Uri.encode(model.path)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}")
                                             }
                                         }
                                     },
@@ -180,10 +182,14 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
 
-                            composable("chat/{modelPath}") { backStackEntry ->
+                            composable("chat/{modelPath}/{conversationId}") { backStackEntry ->
                                 val modelPath = backStackEntry.arguments
                                     ?.getString("modelPath")
                                     ?.let { Uri.decode(it) }
+                                val conversationId = backStackEntry.arguments
+                                    ?.getString("conversationId")
+                                    ?.toLongOrNull()
+                                    ?: ChatViewModel.DEFAULT_CONVERSATION_ID
 
                                 val temperature by settingsVm.temperature.collectAsState()
                                 val topP by settingsVm.topP.collectAsState()
@@ -195,8 +201,8 @@ class MainActivity : ComponentActivity() {
                                 val systemPrompt by settingsVm.systemPrompt.collectAsState()
                                 val template by settingsVm.selectedTemplate.collectAsState()
 
-                                LaunchedEffect(modelPath, contextSize, threadCount, gpuLayers) {
-                                    chatVm.bindConversation(ChatViewModel.DEFAULT_CONVERSATION_ID)
+                                LaunchedEffect(modelPath, conversationId, contextSize, threadCount, gpuLayers) {
+                                    chatVm.bindConversation(conversationId)
                                     modelPath?.let {
                                         chatVm.loadModel(it, contextSize, threadCount, gpuLayers)
                                     }
@@ -215,7 +221,7 @@ class MainActivity : ComponentActivity() {
                                         chatVm.sendMessage(
                                             text = text,
                                             imageBytes = imageBytes,
-                                            conversationId = 1L,
+                                            conversationId = conversationId,
                                             clearConversationFirst = false,
                                             temp = temperature,
                                             topP = topP,
@@ -225,10 +231,21 @@ class MainActivity : ComponentActivity() {
                                             template = template
                                         )
                                     },
-                                    onClearChat = { chatVm.clearChat(1L) },
+                                    onClearChat = { chatVm.clearChat(conversationId) },
                                     onStopGeneration = { chatVm.stopGeneration() },
                                     onDismissError = { chatVm.dismissError() },
-                                    onNavigateToSettings = { navController.navigate("settings") }
+                                    onNavigateToSettings = { navController.navigate("settings") },
+                                    onOpenConversations = { navController.navigate("conversations/${Uri.encode(modelPath ?: "")}") }
+                                )
+                            }
+
+                            composable("conversations/{modelPath}") { backStackEntry ->
+                                val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
+                                ConversationListScreen(
+                                    chatVm = chatVm,
+                                    onConversationSelected = { conversationId ->
+                                        navController.navigate("chat/${Uri.encode(modelPath)}/$conversationId")
+                                    }
                                 )
                             }
 
@@ -251,8 +268,14 @@ class MainActivity : ComponentActivity() {
 
                             composable("prompt_lab/{modelPath}") { backStackEntry ->
                                 val modelPath = backStackEntry.arguments?.getString("modelPath")?.let { Uri.decode(it) } ?: ""
+                                val contextSize by settingsVm.contextSize.collectAsState()
+                                val threadCount by settingsVm.threadCount.collectAsState()
+                                val gpuLayers by settingsVm.gpuLayers.collectAsState()
                                 PromptLabScreen(
                                     modelPath = modelPath,
+                                    contextSize = contextSize,
+                                    threadCount = threadCount,
+                                    gpuLayers = gpuLayers,
                                     chatVm = chatVm,
                                     onNavigateBack = { navController.popBackStack() }
                                 )

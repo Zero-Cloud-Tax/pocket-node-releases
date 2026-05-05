@@ -49,6 +49,7 @@ class ChatViewModel(
     private var rawFd = -1
 
     val messages = mutableStateListOf<ChatMessage>()
+    val currentConversationId = mutableStateOf(defaultConversationId)
     val isGenerating = mutableStateOf(false)
     val currentAssistantMessage = mutableStateOf("")
     val visibleIsGenerating = mutableStateOf(false)
@@ -68,8 +69,10 @@ class ChatViewModel(
         if (activeConversationId == conversationId && messagesJob != null) return
 
         activeConversationId = conversationId
+        currentConversationId.value = conversationId
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
+            repository.ensureConversation(conversationId, defaultTitleForConversation(conversationId))
             repository.getMessages(conversationId).collectLatest { history ->
                 messages.clear()
                 messages.addAll(history)
@@ -410,6 +413,28 @@ class ChatViewModel(
                 isGenerating.value = false
             }
         }
+    }
+
+    fun getConversations() = repository.getConversations()
+
+    fun createConversation(title: String, modelId: String = "unknown", onCreated: (Long) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val id = repository.createConversation(title = title, modelId = modelId)
+            withContext(Dispatchers.Main) { onCreated(id) }
+        }
+    }
+
+    fun renameConversation(conversationId: Long, title: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateConversationTitle(conversationId, title)
+        }
+    }
+
+    private fun defaultTitleForConversation(conversationId: Long): String = when (conversationId) {
+        DEFAULT_CONVERSATION_ID -> "Chat"
+        ASK_IMAGE_CONVERSATION_ID -> "Ask Image"
+        PROMPT_LAB_CONVERSATION_ID -> "Prompt Lab"
+        else -> "Conversation"
     }
 
     private fun resolveVisionProjectorFile(): File? {

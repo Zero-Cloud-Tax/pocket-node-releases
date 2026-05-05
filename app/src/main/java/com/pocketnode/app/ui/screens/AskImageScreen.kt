@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.PromptTemplate
+import com.pocketnode.app.ui.components.MarkdownText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -98,20 +99,14 @@ fun AskImageScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Ask Image") })
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    ) {
             if (!isModelReady) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 Text("Loading vision model...", style = MaterialTheme.typography.bodySmall)
@@ -246,6 +241,5 @@ fun AskImageScreen(
                     }
                 }
             }
-        }
     }
 }

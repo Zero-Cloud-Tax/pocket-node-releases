@@ -11,6 +11,11 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 object DocumentReader {
+    data class ExtractionResult(
+        val text: String,
+        val wasTruncated: Boolean,
+        val warning: String? = null
+    )
 
     private var isInitialized = false
 
@@ -21,9 +26,11 @@ object DocumentReader {
         }
     }
 
-    suspend fun extractText(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
+    suspend fun extractText(context: Context, uri: Uri): ExtractionResult = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(uri)
         val content = StringBuilder()
+        var wasTruncated = false
+        var warning: String? = null
 
         try {
             if (mimeType == "application/pdf" || uri.toString().endsWith(".pdf", true)) {
@@ -34,6 +41,10 @@ object DocumentReader {
                         stripper.startPage = 1
                         stripper.endPage = 20 // read up to 20 pages
                         content.append(stripper.getText(document))
+                        if (document.numberOfPages > 20) {
+                            wasTruncated = true
+                            warning = "Document truncated to first 20 pages."
+                        }
                     }
                 }
             } else {
@@ -47,14 +58,25 @@ object DocumentReader {
                             line = reader.readLine()
                             linesRead++
                         }
+                        if (line != null) {
+                            wasTruncated = true
+                            warning = "Document truncated to first 1000 lines."
+                        }
                     }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            return@withContext "Error extracting document text: ${e.message}"
+            return@withContext ExtractionResult(
+                text = "Error extracting document text: ${e.message}",
+                wasTruncated = false
+            )
         }
 
-        content.toString().trim()
+        ExtractionResult(
+            text = content.toString().trim(),
+            wasTruncated = wasTruncated,
+            warning = warning
+        )
     }
 }

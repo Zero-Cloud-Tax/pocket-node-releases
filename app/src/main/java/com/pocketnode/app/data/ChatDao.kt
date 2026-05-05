@@ -10,8 +10,14 @@ interface ChatDao {
     @Query("SELECT * FROM conversations ORDER BY lastMessageAt DESC")
     fun getAllConversations(): Flow<List<Conversation>>
 
+    @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1")
+    suspend fun getConversationById(id: Long): Conversation?
+
     @Insert
     suspend fun insertConversation(conversation: Conversation): Long
+
+    @Query("UPDATE conversations SET title = :title WHERE id = :id")
+    suspend fun updateConversationTitle(id: Long, title: String)
 
     @Query("UPDATE conversations SET lastMessageAt = :timestamp WHERE id = :id")
     suspend fun updateConversationTimestamp(id: Long, timestamp: Long)

@@ -18,11 +18,15 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.PromptTemplate
+import com.pocketnode.app.ui.components.MarkdownText
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PromptLabScreen(
     modelPath: String,
+    contextSize: Int,
+    threadCount: Int,
+    gpuLayers: Int,
     chatVm: ChatViewModel,
     onNavigateBack: () -> Unit
 ) {
@@ -40,14 +44,14 @@ fun PromptLabScreen(
     
     val clipboardManager = LocalClipboardManager.current
     
-    LaunchedEffect(modelPath) {
+    LaunchedEffect(modelPath, contextSize, threadCount, gpuLayers) {
         chatVm.bindConversation(ChatViewModel.PROMPT_LAB_CONVERSATION_ID)
         if (modelPath.isNotBlank()) {
             chatVm.loadModel(
                 modelPath = modelPath,
-                contextSize = 2048,
-                threadCount = 4,
-                nGpuLayers = 0,
+                contextSize = contextSize,
+                threadCount = threadCount,
+                nGpuLayers = gpuLayers,
                 reloadIfConfigChanged = false
             )
         }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.pocketnode.app.BuildConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.crypto.Mac
@@ -15,9 +16,6 @@ import javax.crypto.spec.SecretKeySpec
 val Context.licenseDataStore: DataStore<Preferences> by preferencesDataStore(name = "license")
 
 // License key format: PN-[28 hex chars][4 hex serial]
-// Keys are generated offline via keygen.sh using HMAC-SHA256.
-// The secret below must match the one in keygen.sh.
-private const val HMAC_SECRET = "pocketnode-pro-secret-2024"
 private val KEY_LICENSE = stringPreferencesKey("license_key")
 
 class LicenseManager(private val context: Context) {
@@ -25,7 +23,9 @@ class LicenseManager(private val context: Context) {
     val savedKeyFlow: Flow<String> = context.licenseDataStore.data
         .map { prefs -> prefs[KEY_LICENSE] ?: "" }
 
-    val isProFlow: Flow<Boolean> = kotlinx.coroutines.flow.flowOf(true) // Force unlock for owner testing
+    val isProFlow: Flow<Boolean> = savedKeyFlow.map { key ->
+        key.isNotBlank() && isValidKey(key)
+    }
 
     suspend fun validateAndSave(key: String): Boolean {
         val valid = isValidKey(key.trim())
@@ -55,7 +55,7 @@ class LicenseManager(private val context: Context) {
 
         private fun computeHmac(serial: String): String {
             val mac = Mac.getInstance("HmacSHA256")
-            val key = SecretKeySpec(HMAC_SECRET.toByteArray(Charsets.UTF_8), "HmacSHA256")
+            val key = SecretKeySpec(BuildConfig.PRO_HMAC_SECRET.toByteArray(Charsets.UTF_8), "HmacSHA256")
             mac.init(key)
             val hash = mac.doFinal(serial.toByteArray(Charsets.UTF_8))
             return hash.joinToString("") { "%02X".format(it) }.take(28)

@@ -1,5 +1,7 @@
 package com.pocketnode.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,9 +13,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketnode.app.BuildConfig
 import com.pocketnode.app.licensing.LicenseManager
 import kotlinx.coroutines.launch
 
@@ -31,6 +35,7 @@ fun UpgradeScreen(
     isPro: Boolean,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var licenseInput by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<Boolean?>(null) }
@@ -112,7 +117,10 @@ fun UpgradeScreen(
 
         // Purchase CTA — placeholder URL (replace with your Gumroad/Stripe link)
         Button(
-            onClick = { /* TODO: open purchase URL */ },
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.PRO_PURCHASE_URL))
+                context.startActivity(intent)
+            },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(14.dp)
         ) {
