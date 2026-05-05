@@ -1,10 +1,13 @@
 package com.pocketnode.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.item
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,7 +20,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -30,99 +35,147 @@ data class GalleryItem(
     val isComingSoon: Boolean = false
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GalleryScreen(
     onNavigate: (String) -> Unit
 ) {
-    val items = listOf(
+    val primaryNodes = listOf(
         GalleryItem(
-            "AI Chat",
-            "Engage in fluid, multi-turn conversations with Thinking Mode.",
+            "Chat Node",
+            "Conversational intelligence, fully on-device.",
             Icons.Default.Chat,
             "models/chat",
             listOf(Color(0xFF8B6BFF), Color(0xFF6B4EE6))
         ),
         GalleryItem(
-            "Ask Image",
-            "Use multimodal power to identify objects and solve visual puzzles.",
+            "Vision Node",
+            "Ask questions about images instantly.",
             Icons.Default.Image,
             "models/ask_image",
             listOf(Color(0xFF00E5FF), Color(0xFF00B3CC))
         ),
         GalleryItem(
-            "Prompt Lab",
-            "A dedicated workspace to test prompts and parameters.",
+            "Prompt Forge",
+            "Design, test, and refine prompts.",
             Icons.Default.Science,
             "models/prompt_lab",
             listOf(Color(0xFFFF3366), Color(0xFFCC0033))
         ),
         GalleryItem(
-            "Model Hub",
-            "Download, manage, and import open-source LLMs.",
+            "Model Vault",
+            "Download and manage local models.",
             Icons.Default.Folder,
             "models/manage",
             listOf(Color(0xFFFFAA00), Color(0xFFFF7700))
-        ),
+        )
+    )
+
+    val systemNodes = listOf(
         GalleryItem(
-            "Audio Scribe",
-            "Transcribe and translate voice recordings in real-time.",
+            "Audio Node",
+            "Transcribe and analyze speech locally.",
             Icons.Default.Mic,
             "",
             listOf(Color(0xFF8D95B4), Color(0xFF4C5468)),
             isComingSoon = true
         ),
         GalleryItem(
-            "Agent Skills",
-            "Local Ops Assistant: Query installed models, storage, RAM, and device health.",
+            "Skill Packs",
+            "Equip models with domain-specific skills.",
             Icons.Default.Build,
             "",
             listOf(Color(0xFF8D95B4), Color(0xFF4C5468)),
             isComingSoon = true
         ),
         GalleryItem(
-            "Settings",
-            "Configure hardware acceleration, licenses, and defaults.",
+            "Agent Node",
+            "Autonomous workflows powered locally.",
+            Icons.Default.Memory,
+            "",
+            listOf(Color(0xFF8D95B4), Color(0xFF4C5468)),
+            isComingSoon = true
+        ),
+        GalleryItem(
+            "System Node",
+            "Configure hardware, memory, and performance.",
             Icons.Default.Settings,
             "settings",
             listOf(Color(0xFF8D95B4), Color(0xFF4C5468))
         )
     )
 
-    Column(
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 16.dp),
+        contentPadding = PaddingValues(bottom = 32.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 32.dp)
-        ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 32.dp)
+            ) {
+                Text(
+                    text = "Pocket Node",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Local-First Intelligence Engine",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Explore, run, and extend on-device AI.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
             Text(
-                text = "Pocket Node",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Explore, Experience, and Evaluate on-device AI.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                text = "PRIMARY NODES",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(bottom = 32.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(items) { item ->
-                GalleryTile(item = item, onClick = { onNavigate(item.route) })
-            }
+        items(primaryNodes) { item ->
+            GalleryTile(item = item, onClick = { onNavigate(item.route) })
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Text(
+                text = "SYSTEM NODES",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+
+        items(systemNodes) { item ->
+            GalleryTile(item = item, onClick = { onNavigate(item.route) })
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            NodeStatusBlock(isConnected = true)
+        }
+
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            NodeFooter()
         }
     }
 }
@@ -197,5 +250,136 @@ fun GalleryTile(item: GalleryItem, onClick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+@Composable
+fun NodeStatusBlock(isConnected: Boolean) {
+    val statusColor = if (isConnected) Color(0xFF00FF41) else Color(0xFFF59E0B)
+    val statusText = if (isConnected) "Connected" else "Disconnected"
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 16.dp)
+            .border(1.dp, Color(0xFF1F2024), RoundedCornerShape(8.dp)),
+        color = Color(0xFF16171A),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "> STATUS",
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFF9CA3AF),
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            StatusRow(label = "Primary Node", value = "Mac Studio M1 Max (32GB RAM)")
+            StatusRow(label = "Cluster", value = "ZCT Mesh — ", highlight = statusText, highlightColor = statusColor)
+            StatusRow(label = "Engine", value = "Sovereign Brain v0.2")
+            StatusRow(label = "Network", value = "Tailscale Mesh Active")
+        }
+    }
+}
+
+@Composable
+fun StatusRow(
+    label: String,
+    value: String,
+    highlight: String? = null,
+    highlightColor: Color = Color.Unspecified
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF9CA3AF),
+            modifier = Modifier.weight(0.45f)
+        )
+        if (highlight != null) {
+            Row(modifier = Modifier.weight(0.55f)) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color(0xFFE5E7EB)
+                )
+                Text(
+                    text = highlight,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium,
+                    color = highlightColor
+                )
+            }
+        } else {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFFE5E7EB),
+                modifier = Modifier.weight(0.55f)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun NodeFooter() {
+    val badges = listOf(
+        "Pocket Node Lite (Phi-3 Mini)",
+        "Docker Runtime",
+        "Local-First Blueprint",
+        "OpenClaw Engine"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            badges.forEach { label -> NodeBadge(label) }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Zero Cloud Tax",
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xFF9CA3AF)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Sovereign AI  •  Data Ownership  •  Local-First Infrastructure",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF6B7280),
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+fun NodeBadge(label: String) {
+    Surface(
+        shape = RoundedCornerShape(4.dp),
+        color = Color(0xFF1F2024)
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xFF9CA3AF)
+        )
     }
 }
