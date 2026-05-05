@@ -1,17 +1,37 @@
+# IDE / OS
 *.iml
-.gradle
-/local.properties
-/.idea
+.idea/
+app/.idea/
 .DS_Store
-/build
-/app/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-keystore.properties
-*.jks
+
+# Gradle / Kotlin build state
+.gradle/
+.gradle-user/
+.kotlin/
+build/
+app/build/
+captures/
+
+# Android / native build output
+.externalNativeBuild/
+.cxx/
 *.obj
 app-debug.apk
-.gradle-user/
+PocketNodeLite.apk
+
+# Local machine secrets/config
+local.properties
+/local.properties
+keystore.properties
+*.jks
 release.keystore
+
+# Runtime logs / dumps / screenshots
+logcat*.txt
+crash_log*.txt
+fresh_chat_crash_log.txt
+latest_anr.gz
+pocketnode_shot_*.png
+phone-check.png
+window_current.xml
+view.xml
