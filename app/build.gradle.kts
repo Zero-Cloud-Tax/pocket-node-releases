@@ -34,12 +34,16 @@ android {
         versionName = "1.0.1"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
 
         externalNativeBuild {
             cmake {
-                arguments += "-DPOCKETNODE_ENABLE_VULKAN=OFF"
+                // Adreno OpenCL replaces old Vulkan path — stable on Snapdragon 8 series
+                arguments += "-DGGML_OPENCL=ON"
+                arguments += "-DGGML_OPENCL_USE_ADRENO_KERNELS=ON"
+                arguments += "-DGGML_CPU_KLEIDIAI=ON"
+                arguments += "-DGGML_OPENMP=ON"
             }
         }
 

@@ -94,17 +94,6 @@ static std::string system_property(const char *name) {
     return std::string(value);
 }
 
-static bool is_adreno_device() {
-    const std::string board = system_property("ro.board.platform");
-    const std::string hardware = system_property("ro.hardware");
-    return board.find("qcom") != std::string::npos ||
-           board.find("lahaina") != std::string::npos ||
-           board.find("taro") != std::string::npos ||
-           board.find("kalama") != std::string::npos ||
-           board.find("pineapple") != std::string::npos ||
-           hardware.find("qcom") != std::string::npos;
-}
-
 extern "C" {
 
 // =========================================================================
@@ -213,12 +202,11 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
     LOGI("Loading model: %s (gpu_layers=%d)", path, n_gpu_layers);
 
     llama_model_params model_params = llama_model_default_params();
-    const bool block_gpu_offload = is_adreno_device();
-    const int effective_gpu_layers = (!block_gpu_offload && has_gpu_backend())
+    const int effective_gpu_layers = has_gpu_backend()
             ? std::max(0, (int)n_gpu_layers)
             : 0;
     if (n_gpu_layers > 0 && effective_gpu_layers == 0) {
-        LOGI("GPU layers requested, but GPU offload is disabled or unavailable; loading on CPU");
+        LOGI("GPU layers requested, but no GPU backend available; loading on CPU");
     }
     model_params.n_gpu_layers = effective_gpu_layers;
     model_params.use_mmap = true;
