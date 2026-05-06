@@ -15,7 +15,7 @@ include(FetchContent)
 FetchContent_Declare(
     llama_cpp
     GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
-    GIT_TAG        b4160    # pinned stable release
+    GIT_TAG        b9045    # pinned stable — has GGML_OPENCL_USE_ADRENO_KERNELS + GGML_CPU_KLEIDIAI
     GIT_SHALLOW    TRUE
 )
 
@@ -29,20 +29,9 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 # Enable mmap so models stream from storage instead of loading fully into RAM
 set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
-# Vulkan can crash inside some OTA-updated Adreno/Samsung drivers during
-# backend initialization, even when the app requests zero GPU layers. Keep
-# the phone build CPU-only unless this is explicitly enabled for testing.
-option(POCKETNODE_ENABLE_VULKAN "Build llama.cpp with Vulkan GPU offload" OFF)
-
-if(POCKETNODE_ENABLE_VULKAN AND CMAKE_HOST_WIN32 AND EXISTS "C:/VulkanSDK/1.4.341.1")
-    set(VULKAN_SDK "C:/VulkanSDK/1.4.341.1" CACHE PATH "" FORCE)
-    set(ENV{VULKAN_SDK} "${VULKAN_SDK}")
-    set(Vulkan_GLSLC_EXECUTABLE "${VULKAN_SDK}/Bin/glslc.exe" CACHE FILEPATH "" FORCE)
-    include_directories("${VULKAN_SDK}/Include")
-    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-else()
-    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
-endif()
+# Adreno OpenCL + KleidiAI CPU — flags passed in from build.gradle.kts
+# GGML_OPENCL, GGML_OPENCL_USE_ADRENO_KERNELS, GGML_CPU_KLEIDIAI, GGML_OPENMP
+set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(llama_cpp)
 
@@ -62,16 +51,8 @@ target_include_directories(pocketnode PRIVATE
     ${llama_cpp_SOURCE_DIR}/common
 )
 
-if(DEFINED VULKAN_SDK)
-    target_include_directories(pocketnode PRIVATE "${VULKAN_SDK}/Include")
-endif()
-
 target_link_libraries(pocketnode
     llama
     log
     android
 )
-
-if(GGML_VULKAN)
-    target_link_libraries(pocketnode vulkan)
-endif()
