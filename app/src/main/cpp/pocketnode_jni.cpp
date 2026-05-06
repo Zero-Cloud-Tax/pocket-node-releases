@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <sys/system_properties.h>
+#include <dlfcn.h>
 
 #include "llama.h"
 #include "ggml-backend.h"
@@ -48,6 +49,10 @@ static thread_local std::string g_last_error;
 
 // Track n_past per context
 static std::unordered_map<llama_context*, int> g_n_past;
+
+// llama_backend_init() is deferred to nativeLoadModel (background thread) to
+// avoid blocking the main thread while the OpenCL backend compiles kernels.
+static std::once_flag g_backend_init_flag;
 
 static bool has_gpu_backend() {
     if (!llama_supports_gpu_offload()) {
@@ -101,7 +106,22 @@ extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     LOGI("JNI_OnLoad called, initializing llama backend");
-    llama_backend_init();
+
+    // Attempt to pre-load libOpenCL.so from common locations to ensure it's available for the process.
+    // This is often necessary on Android where libOpenCL.so is not in the default search path for apps.
+    // RTLD_GLOBAL makes the symbols available to subsequently loaded libraries (like ggml-opencl).
+    void* handle = dlopen("libOpenCL.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) handle = dlopen("/vendor/lib64/libOpenCL.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) handle = dlopen("/system/vendor/lib64/libOpenCL.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) handle = dlopen("/system/lib64/libOpenCL.so", RTLD_NOW | RTLD_GLOBAL);
+
+    if (handle) {
+        LOGI("OpenCL library pre-loaded");
+    } else {
+        LOGI("OpenCL library not found; GPU acceleration may fail");
+    }
+    // llama_backend_init() deferred to nativeLoadModel — OpenCL kernel compilation
+    // can take 30-60s on first run and would ANR if called here on the main thread.
     return JNI_VERSION_1_6;
 }
 
@@ -166,6 +186,12 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
         JNIEnv *env, jobject /* this */,
         jstring model_path, jint n_gpu_layers) {
 
+    std::call_once(g_backend_init_flag, []() {
+        LOGI("Initializing llama backend (first model load)");
+        llama_backend_init();
+        LOGI("llama backend initialized");
+    });
+
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     LOGI("Loading model: %s (gpu_layers=%d)", path, n_gpu_layers);
 
@@ -180,7 +206,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
     model_params.use_mmap = true;
     model_params.use_mlock = false;
 
-    llama_model *model = llama_load_model_from_file(path, model_params);
+    llama_model *model = llama_model_load_from_file(path, model_params);
     env->ReleaseStringUTFChars(model_path, path);
 
     if (!model) {
@@ -198,7 +224,7 @@ JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeModel(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     if (model_ptr != 0) {
-        llama_free_model(reinterpret_cast<llama_model *>(model_ptr));
+        llama_model_free(reinterpret_cast<llama_model *>(model_ptr));
         LOGI("Model freed");
     }
 }
@@ -218,7 +244,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateContext(
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
 
-    llama_context *ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context *ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         g_last_error = "Failed to create inference context. The model may require more memory than available.";
         LOGE("%s", g_last_error.c_str());
@@ -304,7 +330,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Kotlin sends a complete prompt, including recent chat history, on each
     // request. Start from a clean KV cache so prior requests are not replayed
     // underneath that full prompt.
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx), true);
     int n_past = 0;
     g_n_past[ctx] = 0;
 
@@ -313,7 +339,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 
     if (n_past + n_tokens > llama_n_ctx(ctx)) {
         // Context full — clear KV cache and restart
-        llama_kv_cache_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
         g_n_past[ctx] = 0;
         n_past = 0;
         LOGI("Context limit reached — KV cache cleared");
@@ -350,7 +376,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
     while (n_decode < max_tokens && !g_stop_generation.load()) {
-        if (llama_token_is_eog(vocab, new_token_id)) {
+        if (llama_vocab_is_eog(vocab, new_token_id)) {
             break;
         }
 
@@ -406,7 +432,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeClearCache(
         JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
     if (ctx_ptr == 0) return;
     llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx), true);
     {
         std::lock_guard<std::mutex> lock(g_inference_mutex);
         g_n_past[ctx] = 0;
@@ -444,21 +470,21 @@ JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetContextLength(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_n_ctx_train(model));
+    return static_cast<jint>(llama_model_n_ctx_train(model));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetEmbeddingSize(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_n_embd(model));
+    return static_cast<jint>(llama_model_n_embd(model));
 }
 
 JNIEXPORT jint JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetVocabSize(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
-    return static_cast<jint>(llama_n_vocab(model));
+    return static_cast<jint>(llama_vocab_n_tokens(llama_model_get_vocab(model)));
 }
 
 // =========================================================================
