@@ -117,8 +117,8 @@ FWD(cl_int,clReleaseProgram,(cl_program a),(a),CL_OUT_OF_RESOURCES)
 FWD(cl_int,clReleaseEvent,(cl_event a),(a),CL_OUT_OF_RESOURCES)
 FWD(cl_int,clWaitForEvents,(cl_uint a,const cl_event*b),(a,b),CL_OUT_OF_RESOURCES)
 ]=])
-    # Create OpenCL stub as STATIC library to embed in pocketnode.so
-    add_library(OpenCL STATIC "${OPENCL_STUB_C}")
+    # Create OpenCL stub as SHARED library so Android packages it separately
+    add_library(OpenCL SHARED "${OPENCL_STUB_C}")
     target_include_directories(OpenCL PRIVATE "${opencl_headers_SOURCE_DIR}")
     set(OpenCL_LIBRARY OpenCL CACHE FILEPATH "" FORCE)
     set(OpenCL_LIBRARIES OpenCL CACHE STRING "" FORCE)
