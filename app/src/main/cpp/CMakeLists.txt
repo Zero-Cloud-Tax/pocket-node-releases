@@ -33,6 +33,27 @@ set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 # GGML_OPENCL, GGML_OPENCL_USE_ADRENO_KERNELS, GGML_CPU_KLEIDIAI, GGML_OPENMP
 set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
 
+# ============================================================
+# OpenCL headers for Android cross-compilation
+# libOpenCL.so is provided at runtime by the Adreno driver;
+# CMake only needs the headers and a library name to link against.
+# ============================================================
+if(ANDROID AND GGML_OPENCL)
+    FetchContent_Declare(
+        opencl_headers
+        GIT_REPOSITORY https://github.com/KhronosGroup/OpenCL-Headers.git
+        GIT_TAG        v2023.12.14
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(opencl_headers)
+
+    find_library(opencl_system_lib OpenCL)
+
+    set(OpenCL_INCLUDE_DIR "${opencl_headers_SOURCE_DIR}" CACHE PATH "" FORCE)
+    set(OpenCL_LIBRARY "${opencl_system_lib}" CACHE FILEPATH "" FORCE)
+    set(OpenCL_FOUND TRUE CACHE BOOL "" FORCE)
+endif()
+
 FetchContent_MakeAvailable(llama_cpp)
 
 # ============================================================
