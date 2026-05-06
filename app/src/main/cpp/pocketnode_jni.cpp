@@ -267,6 +267,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 
     llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
     const llama_model *model = llama_get_model(ctx);
+    const llama_vocab *vocab = llama_model_get_vocab(model);
 
     const char *prompt_cstr = env->GetStringUTFChars(j_prompt, nullptr);
     std::string prompt(prompt_cstr);
@@ -287,12 +288,12 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Tokenize the prompt
     const int n_prompt_max = prompt.size() + 256;
     std::vector<llama_token> tokens(n_prompt_max);
-    int n_tokens = llama_tokenize(model, prompt.c_str(), prompt.size(),
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
                                    tokens.data(), n_prompt_max, true, true);
     if (n_tokens < 0) {
         n_tokens = -n_tokens;
         tokens.resize(n_tokens);
-        n_tokens = llama_tokenize(model, prompt.c_str(), prompt.size(),
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
                                    tokens.data(), n_tokens, true, true);
     } else {
         tokens.resize(n_tokens);
@@ -335,15 +336,10 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Set up sampler chain
     llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
-        llama_n_vocab(model),
-        llama_token_eos(model),
-        llama_token_nl(model),
         64,              // penalty_last_n
         repeat_penalty,  // penalty_repeat
         0.0f,            // penalty_freq
-        0.0f,            // penalty_present
-        true,            // penalize_nl
-        false            // ignore_eos
+        0.0f             // penalty_present
     ));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
@@ -354,12 +350,12 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
     while (n_decode < max_tokens && !g_stop_generation.load()) {
-        if (llama_token_is_eog(model, new_token_id)) {
+        if (llama_token_is_eog(vocab, new_token_id)) {
             break;
         }
 
         char buf[256];
-        int n = llama_token_to_piece(model, new_token_id, buf, sizeof(buf), 0, true);
+        int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
         if (n > 0) {
             std::string token_text(buf, n);
             jstring j_token = env->NewStringUTF(token_text.c_str());
@@ -423,6 +419,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetTokenCount(
         JNIEnv *env, jobject /* this */, jlong model_ptr, jstring j_text) {
 
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
+    const llama_vocab *vocab = llama_model_get_vocab(model);
 
     const char *text_cstr = env->GetStringUTFChars(j_text, nullptr);
     std::string text(text_cstr);
@@ -430,7 +427,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetTokenCount(
 
     int n_prompt_max = text.size() + 256;
     std::vector<llama_token> tokens(n_prompt_max);
-    int n_tokens = llama_tokenize(model, text.c_str(), text.size(),
+    int n_tokens = llama_tokenize(vocab, text.c_str(), text.size(),
                                    tokens.data(), n_prompt_max, true, true);
 
     if (n_tokens < 0) {
