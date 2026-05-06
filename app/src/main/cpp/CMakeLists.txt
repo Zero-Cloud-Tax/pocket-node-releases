@@ -47,10 +47,10 @@ if(ANDROID AND GGML_OPENCL)
     )
     FetchContent_MakeAvailable(opencl_headers)
 
-    find_library(opencl_system_lib OpenCL)
-
     set(OpenCL_INCLUDE_DIR "${opencl_headers_SOURCE_DIR}" CACHE PATH "" FORCE)
-    set(OpenCL_LIBRARY "${opencl_system_lib}" CACHE FILEPATH "" FORCE)
+    # Stub .so compiled from NDK clang satisfies CMake's link check;
+    # the real libOpenCL.so is loaded at runtime from the Adreno driver.
+    set(OpenCL_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/opencl-stub/libOpenCL.so" CACHE FILEPATH "" FORCE)
     set(OpenCL_FOUND TRUE CACHE BOOL "" FORCE)
 endif()
 
