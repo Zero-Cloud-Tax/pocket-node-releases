@@ -2,6 +2,7 @@ package com.pocketnode.app.inference
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.documentfile.provider.DocumentFile
@@ -13,12 +14,23 @@ import com.pocketnode.app.data.ChatRepository
 import com.pocketnode.app.data.model.ChatMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+
+data class InferenceStats(
+    val tps: Float,
+    val ttftMs: Long,
+    val draftAcceptRate: Float,
+    val totalTokens: Int,
+    val promptEvalTps: Float,
+    val backendName: String
+)
 
 class ChatViewModel(
     private val inference: LlamaInference,
@@ -41,6 +53,12 @@ class ChatViewModel(
     private var loadedContextSize = 0
     private var loadedThreadCount = 0
     private var loadedGpuLayers = 0
+
+    // Draft model state (speculative decoding)
+    private var draftModelPtr = 0L
+    private var draftContextPtr = 0L
+    private var loadedDraftModelPath: String? = null
+
     private var activeConversationId = defaultConversationId
     private var generatingConversationId: Long? = null
     private var messagesJob: Job? = null
@@ -59,6 +77,7 @@ class ChatViewModel(
     val modelName = mutableStateOf<String?>(null)
     val modelError = mutableStateOf<String?>(null)
     val backendName = mutableStateOf("CPU")
+    val lastInferenceStats = mutableStateOf<InferenceStats?>(null)
 
     init {
         bindConversation(defaultConversationId)
@@ -222,6 +241,90 @@ class ChatViewModel(
         return !modelPath.isNullOrBlank() && loadedModelPath == modelPath && contextPtr != 0L
     }
 
+    /**
+     * Load a draft model for speculative decoding.
+     * [draftModelPath]  absolute path to the draft GGUF
+     * [mainFamily]      family string of the main model (e.g. "SmolLM3") for compat check
+     * [draftFamily]     family string of the draft model
+     * [mainTokenizerHash] / [draftTokenizerHash] — SHA256 of each tokenizer.json if known
+     */
+    fun loadDraftModel(
+        draftModelPath: String,
+        mainContextSize: Int,
+        threadCount: Int,
+        nGpuLayers: Int = 0,
+        mainFamily: String? = null,
+        draftFamily: String? = null,
+        mainTokenizerHash: String? = null,
+        draftTokenizerHash: String? = null
+    ) {
+        // Tokenizer/family compatibility check
+        if (mainTokenizerHash != null && draftTokenizerHash != null
+            && mainTokenizerHash != draftTokenizerHash) {
+            modelError.value = "Draft model has a different tokenizer than the main model. Speculative decoding requires matching tokenizers."
+            return
+        }
+        if (mainFamily != null && draftFamily != null && mainFamily != draftFamily) {
+            modelError.value = "Warning: draft model family ($draftFamily) differs from main model family ($mainFamily). Acceptance rate may be low."
+            // Allow but warn; do not block
+        }
+
+        if (loadedDraftModelPath == draftModelPath && draftContextPtr != 0L) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                nativeSessionMutex.withLock {
+                    // Free previous draft if any
+                    if (draftContextPtr != 0L) {
+                        inference.nativeFreeDraftContext(draftContextPtr)
+                        draftContextPtr = 0L
+                    }
+                    if (draftModelPtr != 0L) {
+                        inference.nativeFreeDraftModel(draftModelPtr)
+                        draftModelPtr = 0L
+                    }
+
+                    val ptr = inference.nativeLoadDraftModel(draftModelPath, nGpuLayers)
+                    if (ptr == 0L) throw RuntimeException(
+                        inference.nativeGetLastError().ifBlank { "Unable to load draft model." }
+                    )
+
+                    // Draft context: match main up to 2048 for best acceptance rate
+                    val draftCtxSize = minOf(mainContextSize, 2048)
+                    val ctxPtr = inference.nativeCreateDraftContext(ptr, draftCtxSize, threadCount)
+                    if (ctxPtr == 0L) throw RuntimeException(
+                        inference.nativeGetLastError().ifBlank { "Unable to create draft context." }
+                    )
+
+                    draftModelPtr = ptr
+                    draftContextPtr = ctxPtr
+                    loadedDraftModelPath = draftModelPath
+                    Log.i("PocketNode", "Draft model loaded: $draftModelPath (ctx=$draftCtxSize)")
+                }
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) {
+                    modelError.value = "Draft model error: ${e.message}"
+                }
+            }
+        }
+    }
+
+    fun unloadDraftModel() {
+        viewModelScope.launch(Dispatchers.IO) {
+            nativeSessionMutex.withLock {
+                if (draftContextPtr != 0L) {
+                    inference.nativeFreeDraftContext(draftContextPtr)
+                    draftContextPtr = 0L
+                }
+                if (draftModelPtr != 0L) {
+                    inference.nativeFreeDraftModel(draftModelPtr)
+                    draftModelPtr = 0L
+                }
+                loadedDraftModelPath = null
+            }
+        }
+    }
+
     private fun closeFdIfNeeded() {
         if (rawFd >= 0) {
             inference.nativeCloseFd(rawFd)
@@ -250,7 +353,13 @@ class ChatViewModel(
         topK: Int = 40,
         maxTokens: Int = 512,
         systemPrompt: String = "",
-        template: PromptTemplate = PromptTemplate.ChatML
+        template: PromptTemplate = PromptTemplate.ChatML,
+        // Speculative decoding params (0 / false = disabled)
+        speculativeEnabled: Boolean = false,
+        nDraft: Int = 5,
+        batchSize: Int = 512,
+        ubatchSize: Int = 128,
+        benchmarkMode: Boolean = false
     ) {
         val trimmedText = text.trim()
         if (trimmedText.isBlank() || contextPtr == 0L || isGenerating.value) return
@@ -296,7 +405,7 @@ class ChatViewModel(
                     override fun onToken(token: String) {
                         partialMessage += token
                         val now = System.currentTimeMillis()
-                        
+
                         // Throttle UI updates to reduce recomposition and rendering pressure.
                         if (now - lastUiUpdateTime > 150) {
                             lastUiUpdateTime = now
@@ -305,7 +414,7 @@ class ChatViewModel(
                                 syncVisibleGenerationState()
                             }
                         }
-                        
+
                         // Periodically persist to DB every 2000ms
                         if (now - lastDbSaveTime > 2000) {
                             lastDbSaveTime = now
@@ -314,6 +423,25 @@ class ChatViewModel(
                                     ChatMessage(id = assistantMsgId, conversationId = conversationId, role = "assistant", content = partialMessage)
                                 )
                             }
+                        }
+                    }
+
+                    override fun onStats(
+                        tps: Float,
+                        ttftMs: Long,
+                        draftAcceptRate: Float,
+                        totalTokens: Int,
+                        promptEvalTps: Float,
+                        backendName: String
+                    ) {
+                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, backendName)
+                        if (benchmarkMode) {
+                            Log.d("PocketNode-Bench",
+                                "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s"
+                                    .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, backendName))
+                        }
+                        viewModelScope.launch(Dispatchers.Main) {
+                            lastInferenceStats.value = stats
                         }
                     }
                 }
@@ -348,8 +476,12 @@ class ChatViewModel(
                             }
                         }
 
+                        val effectiveDraftCtx = if (speculativeEnabled && draftContextPtr != 0L)
+                            draftContextPtr else 0L
+
                         inference.nativeGenerate(
-                            contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f, callback
+                            contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f,
+                            effectiveDraftCtx, nDraft, batchSize, ubatchSize, callback
                         )
                     }
                 } finally {
@@ -465,9 +597,12 @@ class ChatViewModel(
     override fun onCleared() {
         super.onCleared()
         app.activeSession = null
+        if (draftContextPtr != 0L) inference.nativeFreeDraftContext(draftContextPtr)
+        if (draftModelPtr != 0L) inference.nativeFreeDraftModel(draftModelPtr)
         if (contextPtr != 0L) inference.nativeFreeContext(contextPtr)
         if (modelPtr != 0L) inference.nativeFreeModel(modelPtr)
         loadedModelPath = null
+        loadedDraftModelPath = null
         loadedContextSize = 0
         loadedThreadCount = 0
         loadedGpuLayers = 0

@@ -4,7 +4,9 @@ data class RemoteModel(
     val name: String,
     val description: String,
     val huggingFaceUrl: String,
-    val size: String
+    val size: String,
+    val defaultRole: ModelRole = ModelRole.MAIN,
+    val family: String? = null
 )
 
 val RECOMMENDED_MODELS = listOf(
@@ -30,12 +32,22 @@ val RECOMMENDED_MODELS = listOf(
         "LLaVA 1.5 7B (Vision)",
         "Vision model. Understands images when you attach them.",
         "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf",
-        "4.0 GB"
+        "4.0 GB",
+        defaultRole = ModelRole.VISION
     ),
     RemoteModel(
         "LLaVA 1.5 Projector",
         "Required companion for LLaVA. Download this to process images.",
         "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf",
-        "600 MB"
+        "600 MB",
+        defaultRole = ModelRole.VISION
+    ),
+    RemoteModel(
+        "SmolLM2 135M Draft (Q4_0)",
+        "Ultra-fast draft model for speculative decoding. 88MB — pair with any main model to boost TPS via speculative sampling.",
+        "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf",
+        "88 MB",
+        defaultRole = ModelRole.DRAFT,
+        family = "SmolLM2"
     )
 )

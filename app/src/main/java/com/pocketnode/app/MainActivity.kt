@@ -164,6 +164,8 @@ class MainActivity : ComponentActivity() {
                             composable("models/{mode}") { backStackEntry ->
                                 val mode = backStackEntry.arguments?.getString("mode") ?: "manage"
                                 val vm: ModelsViewModel = viewModel(factory = factory)
+                                val benchmarkMode by settingsVm.benchmarkMode.collectAsState()
+                                val lastStats = chatVm.lastInferenceStats.value
                                 ModelsScreen(
                                     viewModel = vm,
                                     isPro = isPro,
@@ -172,13 +174,13 @@ class MainActivity : ComponentActivity() {
                                             "chat" -> navController.navigate("chat/${Uri.encode(model.path)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}")
                                             "ask_image" -> navController.navigate("ask_image/${Uri.encode(model.path)}")
                                             "prompt_lab" -> navController.navigate("prompt_lab/${Uri.encode(model.path)}")
-                                            else -> { /* In manage mode, maybe just show details or go to chat as default */ 
-                                                navController.navigate("chat/${Uri.encode(model.path)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}")
-                                            }
+                                            else -> navController.navigate("chat/${Uri.encode(model.path)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}")
                                         }
                                     },
                                     onNavigateToSettings = { navController.navigate("settings") },
-                                    onNavigateToUpgrade = { navController.navigate("upgrade") }
+                                    onNavigateToUpgrade = { navController.navigate("upgrade") },
+                                    benchmarkMode = benchmarkMode,
+                                    lastInferenceStats = lastStats
                                 )
                             }
 
@@ -200,11 +202,31 @@ class MainActivity : ComponentActivity() {
                                 val gpuLayers by settingsVm.gpuLayers.collectAsState()
                                 val systemPrompt by settingsVm.systemPrompt.collectAsState()
                                 val template by settingsVm.selectedTemplate.collectAsState()
+                                val speculativeEnabled by settingsVm.speculativeEnabled.collectAsState()
+                                val draftModelId by settingsVm.draftModelId.collectAsState()
+                                val speculativeDraftCount by settingsVm.speculativeDraftCount.collectAsState()
+                                val batchSize by settingsVm.batchSize.collectAsState()
+                                val ubatchSize by settingsVm.ubatchSize.collectAsState()
+                                val benchmarkMode by settingsVm.benchmarkMode.collectAsState()
 
                                 LaunchedEffect(modelPath, conversationId, contextSize, threadCount, gpuLayers) {
                                     chatVm.bindConversation(conversationId)
                                     modelPath?.let {
                                         chatVm.loadModel(it, contextSize, threadCount, gpuLayers)
+                                    }
+                                }
+
+                                // Load/unload draft model when speculative settings change
+                                LaunchedEffect(speculativeEnabled, draftModelId, contextSize, threadCount, gpuLayers) {
+                                    if (speculativeEnabled && draftModelId.isNotBlank()) {
+                                        chatVm.loadDraftModel(
+                                            draftModelPath = draftModelId,
+                                            mainContextSize = contextSize,
+                                            threadCount = threadCount,
+                                            nGpuLayers = gpuLayers
+                                        )
+                                    } else {
+                                        chatVm.unloadDraftModel()
                                     }
                                 }
 
@@ -228,14 +250,21 @@ class MainActivity : ComponentActivity() {
                                             topK = topK,
                                             maxTokens = maxTokens,
                                             systemPrompt = systemPrompt,
-                                            template = template
+                                            template = template,
+                                            speculativeEnabled = speculativeEnabled,
+                                            nDraft = speculativeDraftCount,
+                                            batchSize = batchSize,
+                                            ubatchSize = ubatchSize,
+                                            benchmarkMode = benchmarkMode
                                         )
                                     },
                                     onClearChat = { chatVm.clearChat(conversationId) },
                                     onStopGeneration = { chatVm.stopGeneration() },
                                     onDismissError = { chatVm.dismissError() },
                                     onNavigateToSettings = { navController.navigate("settings") },
-                                    onOpenConversations = { navController.navigate("conversations/${Uri.encode(modelPath ?: "")}") }
+                                    onOpenConversations = { navController.navigate("conversations/${Uri.encode(modelPath ?: "")}") },
+                                    benchmarkMode = benchmarkMode,
+                                    lastInferenceStats = chatVm.lastInferenceStats.value
                                 )
                             }
 
@@ -282,10 +311,14 @@ class MainActivity : ComponentActivity() {
                             }
 
                             composable("settings") {
+                                val allModels by db.modelDao().getAllModels()
+                                    .collectAsState(initial = emptyList())
+                                val draftModels = allModels.filter { it.role == "DRAFT" }
                                 SettingsScreen(
                                     settings = settingsVm,
                                     licenseManager = app.licenseManager,
                                     isPro = isPro,
+                                    draftModels = draftModels,
                                     onNavigateToUpgrade = { navController.navigate("upgrade") }
                                 )
                             }

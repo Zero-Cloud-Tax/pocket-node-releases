@@ -10,7 +10,7 @@ import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.data.model.Conversation
 import com.pocketnode.app.data.model.LocalModel
 
-@Database(entities = [LocalModel::class, ChatMessage::class, Conversation::class], version = 3, exportSchema = false)
+@Database(entities = [LocalModel::class, ChatMessage::class, Conversation::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao
     abstract fun chatDao(): ChatDao
@@ -64,6 +64,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE models ADD COLUMN role TEXT NOT NULL DEFAULT 'MAIN'")
+                db.execSQL("ALTER TABLE models ADD COLUMN family TEXT")
+                db.execSQL("ALTER TABLE models ADD COLUMN quantization TEXT")
+                db.execSQL("ALTER TABLE models ADD COLUMN tokenizer_hash TEXT")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -74,7 +83,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pocketnode.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

@@ -24,6 +24,9 @@
         android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- Allow app's linker namespace to access Adreno OpenCL from vendor partition -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

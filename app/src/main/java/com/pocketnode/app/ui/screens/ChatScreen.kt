@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.inference.DocumentReader
+import com.pocketnode.app.inference.InferenceStats
 import com.pocketnode.app.ui.components.ChatBubble
 import com.pocketnode.app.ui.components.MarkdownText
 import com.pocketnode.app.ui.components.TypingIndicator
@@ -52,7 +53,9 @@ fun ChatScreen(
     onStopGeneration: () -> Unit,
     onDismissError: () -> Unit,
     onNavigateToSettings: () -> Unit,
-    onOpenConversations: () -> Unit
+    onOpenConversations: () -> Unit,
+    benchmarkMode: Boolean = false,
+    lastInferenceStats: InferenceStats? = null
 ) {
     var inputText by remember { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
@@ -229,7 +232,13 @@ fun ChatScreen(
                 contentPadding = PaddingValues(vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages) { message ->
+                val displayMessages = if (isGenerating && messages.isNotEmpty() && messages.last().role == "assistant") {
+                    messages.dropLast(1)
+                } else {
+                    messages
+                }
+
+                items(displayMessages, key = { it.id }) { message ->
                     ChatBubble(message)
                 }
                 if (isGenerating && currentAssistantMessage.isNotEmpty()) {
@@ -247,6 +256,12 @@ fun ChatScreen(
                 }
                 if (isGenerating && currentAssistantMessage.isEmpty()) {
                     item { TypingIndicator() }
+                }
+                // Benchmark stats row — shown below last AI response when not generating
+                if (!isGenerating && benchmarkMode && lastInferenceStats != null) {
+                    item {
+                        StatsRow(stats = lastInferenceStats)
+                    }
                 }
             }
 
@@ -382,3 +397,66 @@ fun ChatInputBar(
 }
 }
 
+// ── Benchmark stats row ───────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StatsRow(stats: InferenceStats) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = { expanded = !expanded },
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            // Summary line
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                StatChip("%.1f TPS".format(stats.tps))
+                StatChip("${stats.ttftMs}ms TTFT")
+                if (stats.draftAcceptRate > 0f) {
+                    StatChip("${(stats.draftAcceptRate * 100).toInt()}% accept")
+                }
+                Text(
+                    stats.backendName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+            // Expanded detail
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Prompt: %.1f TPS  ·  Tokens: %d  ·  Backend: %s".format(
+                        stats.promptEvalTps, stats.totalTokens, stats.backendName
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatChip(label: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(4.dp)
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}

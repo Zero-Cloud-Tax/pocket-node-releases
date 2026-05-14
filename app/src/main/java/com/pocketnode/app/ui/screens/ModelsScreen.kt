@@ -27,9 +27,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketnode.app.data.model.LocalModel
+import com.pocketnode.app.data.model.ModelRole
 import com.pocketnode.app.data.model.RECOMMENDED_MODELS
 import com.pocketnode.app.data.model.RemoteModel
+import com.pocketnode.app.inference.InferenceStats
 import com.pocketnode.app.licensing.ProGate
+import kotlinx.coroutines.launch
 
 @Composable
 fun ModelsScreen(
@@ -37,14 +40,21 @@ fun ModelsScreen(
     isPro: Boolean,
     onModelSelected: (LocalModel) -> Unit,
     onNavigateToSettings: () -> Unit,
-    onNavigateToUpgrade: () -> Unit
+    onNavigateToUpgrade: () -> Unit,
+    benchmarkMode: Boolean = false,
+    lastInferenceStats: InferenceStats? = null
 ) {
     val context = LocalContext.current
     val models by viewModel.models.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     var showUrlDialog by remember { mutableStateOf(false) }
     var downloadUrl by remember { mutableStateOf("") }
+
+    val chatModels = models.filter { it.role != ModelRole.DRAFT.name }
+    val draftModels = models.filter { it.role == ModelRole.DRAFT.name }
 
     LaunchedEffect(Unit) {
         viewModel.importCompletedDownloads(context)
@@ -55,7 +65,11 @@ fun ModelsScreen(
         onResult = { uri -> uri?.let { viewModel.importModel(context, it) } }
     )
 
-    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { scaffoldPadding ->
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(scaffoldPadding)
+        .background(MaterialTheme.colorScheme.background)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -163,7 +177,8 @@ fun ModelsScreen(
             items(RECOMMENDED_MODELS) { remoteModel ->
                 val state = downloadStates[remoteModel.name] ?: DownloadState.Idle
                 val isBasicModel = remoteModel == RECOMMENDED_MODELS.first()
-                val canDownload = isPro || isBasicModel
+                val isDraftModel = remoteModel.defaultRole == ModelRole.DRAFT
+                val canDownload = isPro || isBasicModel || isDraftModel
                 
                 RemoteModelCard(
                     model = remoteModel,
@@ -182,20 +197,45 @@ fun ModelsScreen(
 
             item { Spacer(modifier = Modifier.height(8.dp)) }
 
-            if (models.isNotEmpty()) {
-                item { SectionHeader("Installed", Icons.Default.FolderOpen) }
-                items(models) { model ->
+            if (chatModels.isNotEmpty()) {
+                item { SectionHeader("Chat Models", Icons.Default.FolderOpen) }
+                items(chatModels) { model ->
+                    val tpsLabel = if (benchmarkMode && lastInferenceStats != null)
+                        "%.1f TPS".format(lastInferenceStats.tps) else null
                     InstalledModelCard(
                         model = model,
                         onSelect = { onModelSelected(model) },
+                        onDelete = { viewModel.deleteModel(model) },
+                        tpsLabel = tpsLabel
+                    )
+                }
+            }
+
+            if (draftModels.isNotEmpty()) {
+                item { Spacer(Modifier.height(8.dp)) }
+                item { SectionHeader("Draft Models", Icons.Default.FolderOpen) }
+                items(draftModels) { model ->
+                    InstalledModelCard(
+                        model = model,
+                        isDraft = true,
+                        onSelect = {
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "Set as draft model in Settings → Speculative Decoding"
+                                )
+                            }
+                        },
                         onDelete = { viewModel.deleteModel(model) }
                     )
                 }
-            } else {
+            }
+
+            if (chatModels.isEmpty() && draftModels.isEmpty()) {
                 item { EmptyModelsPlaceholder() }
             }
         }
-    }
+    } // Column
+    } // Scaffold
 
     if (showUrlDialog) {
         AlertDialog(
@@ -330,31 +370,58 @@ fun RemoteModelCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InstalledModelCard(model: LocalModel, onSelect: () -> Unit, onDelete: () -> Unit) {
+fun InstalledModelCard(
+    model: LocalModel,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+    isDraft: Boolean = false,
+    tpsLabel: String? = null
+) {
     Card(
         onClick = onSelect,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+            containerColor = if (isDraft)
+                Color(0xFFFF6D00).copy(alpha = 0.10f)
+            else
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
         )
     ) {
         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(model.name, style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold)
-                
+
                 // Extract Quantization (e.g. Q4_K_M)
                 val quantRegex = Regex("(Q[1-8]_[A-Z0-9_]+)", RegexOption.IGNORE_CASE)
-                val quantMatch = quantRegex.find(model.path) ?: quantRegex.find(model.name)
-                
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(model.path.split("/").last(), style = MaterialTheme.typography.bodySmall,
+                val quantMatch = model.quantization?.let { Regex("(Q[1-8]_[A-Z0-9_]+)", RegexOption.IGNORE_CASE).find(it) }
+                    ?: quantRegex.find(model.path) ?: quantRegex.find(model.name)
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(model.path.split("/").last(),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    
+
+                    if (isDraft) {
+                        Badge(containerColor = Color(0xFFFF6D00)) {
+                            Text("DRAFT", color = Color.White, fontSize = 10.sp)
+                        }
+                    }
                     if (quantMatch != null) {
                         Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
-                            Text(quantMatch.value.uppercase(), color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            Text(quantMatch.value.uppercase(),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontSize = 10.sp)
+                        }
+                    }
+                    if (tpsLabel != null) {
+                        Badge(containerColor = MaterialTheme.colorScheme.tertiaryContainer) {
+                            Text(tpsLabel,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
                                 fontSize = 10.sp)
                         }
                     }

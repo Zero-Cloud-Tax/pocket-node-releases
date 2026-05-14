@@ -4,6 +4,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <chrono>
 #include <unistd.h>
 #include <algorithm>
 #include <sys/system_properties.h>
@@ -53,20 +54,6 @@ static std::unordered_map<llama_context*, int> g_n_past;
 // llama_backend_init() is deferred to nativeLoadModel (background thread) to
 // avoid blocking the main thread while the OpenCL backend compiles kernels.
 static std::once_flag g_backend_init_flag;
-
-static bool has_gpu_backend() {
-    if (!llama_supports_gpu_offload()) {
-        return false;
-    }
-
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-        if (dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-            return true;
-        }
-    }
-    return false;
-}
 
 static std::string backend_names() {
     std::vector<std::string> names;
@@ -178,6 +165,89 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeFreeImageEmbed(
 }
 
 // =========================================================================
+// Draft model (speculative decoding) — load / context / free
+// =========================================================================
+
+JNIEXPORT jlong JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeLoadDraftModel(
+        JNIEnv *env, jobject /* this */,
+        jstring model_path, jint n_gpu_layers) {
+
+    // Backend must already be initialized by the main model load
+    const char *path = env->GetStringUTFChars(model_path, nullptr);
+    LOGI("Loading draft model: %s (gpu_layers=%d)", path, n_gpu_layers);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = (int)n_gpu_layers;
+    model_params.use_mmap  = true;
+    model_params.use_mlock = false;
+
+    llama_model *model = llama_model_load_from_file(path, model_params);
+    env->ReleaseStringUTFChars(model_path, path);
+
+    if (!model) {
+        g_last_error = "Failed to load draft model. Check path and GGUF validity.";
+        LOGE("%s", g_last_error.c_str());
+        return 0;
+    }
+
+    g_last_error.clear();
+    LOGI("Draft model loaded successfully");
+    return reinterpret_cast<jlong>(model);
+}
+
+JNIEXPORT void JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeFreeDraftModel(
+        JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
+    if (model_ptr != 0) {
+        llama_model_free(reinterpret_cast<llama_model *>(model_ptr));
+        LOGI("Draft model freed");
+    }
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeCreateDraftContext(
+        JNIEnv * /* env */, jobject /* this */,
+        jlong model_ptr, jint context_size, jint n_threads) {
+
+    llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx           = context_size;
+    ctx_params.n_threads       = n_threads;
+    ctx_params.n_threads_batch = n_threads;
+
+    llama_context *ctx = llama_init_from_model(model, ctx_params);
+    if (!ctx) {
+        g_last_error = "Failed to create draft context.";
+        LOGE("%s", g_last_error.c_str());
+        return 0;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_inference_mutex);
+        g_n_past[ctx] = 0;
+    }
+
+    g_last_error.clear();
+    LOGI("Draft context created (ctx_size=%d, threads=%d)", context_size, n_threads);
+    return reinterpret_cast<jlong>(ctx);
+}
+
+JNIEXPORT void JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeFreeDraftContext(
+        JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
+    if (ctx_ptr != 0) {
+        llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
+        {
+            std::lock_guard<std::mutex> lock(g_inference_mutex);
+            g_n_past.erase(ctx);
+        }
+        llama_free(ctx);
+        LOGI("Draft context freed");
+    }
+}
+
+// =========================================================================
 // Model loading / unloading
 // =========================================================================
 
@@ -190,19 +260,19 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
         LOGI("Initializing llama backend (first model load)");
         llama_backend_init();
         LOGI("llama backend initialized");
+        size_t n_backends = ggml_backend_reg_count();
+        LOGI("Registered backends: %zu", n_backends);
+        for (size_t i = 0; i < n_backends; ++i) {
+            ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+            if (reg) LOGI("  backend[%zu]: %s", i, ggml_backend_reg_name(reg));
+        }
     });
 
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     LOGI("Loading model: %s (gpu_layers=%d)", path, n_gpu_layers);
 
     llama_model_params model_params = llama_model_default_params();
-    const int effective_gpu_layers = has_gpu_backend()
-            ? std::max(0, (int)n_gpu_layers)
-            : 0;
-    if (n_gpu_layers > 0 && effective_gpu_layers == 0) {
-        LOGI("GPU layers requested, but no GPU backend available; loading on CPU");
-    }
-    model_params.n_gpu_layers = effective_gpu_layers;
+    model_params.n_gpu_layers = (int)n_gpu_layers;
     model_params.use_mmap = true;
     model_params.use_mlock = false;
 
@@ -277,6 +347,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeFreeContext(
 
 // =========================================================================
 // Text generation (streaming via Kotlin callback)
+// Supports both standard and speculative decoding (draft_ctx_ptr != 0).
 // Mutex ensures only one inference runs at a time — safe for concurrent
 // calls from both the chat UI and the Edge API service.
 // =========================================================================
@@ -287,6 +358,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         jlong ctx_ptr, jstring j_prompt, jlong image_embed_ptr,
         jint max_tokens, jfloat temperature, jfloat top_p,
         jint top_k, jfloat repeat_penalty,
+        jlong draft_ctx_ptr, jint n_draft, jint batch_size, jint ubatch_size,
         jobject callback) {
 
     std::lock_guard<std::mutex> lock(g_inference_mutex);
@@ -299,56 +371,49 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     std::string prompt(prompt_cstr);
     env->ReleaseStringUTFChars(j_prompt, prompt_cstr);
 
-    // Get the callback method
+    // Resolve callback methods
     jclass callbackClass = env->GetObjectClass(callback);
-    jmethodID invokeMethod = env->GetMethodID(callbackClass, "onToken",
-                                               "(Ljava/lang/String;)V");
-    if (!invokeMethod) {
+    jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
+    jmethodID onStatsMethod = env->GetMethodID(callbackClass, "onStats", "(FJFIFLjava/lang/String;)V");
+    if (!onTokenMethod) {
         g_last_error = "Cannot find callback onToken method";
         LOGE("%s", g_last_error.c_str());
         return;
     }
 
     g_stop_generation.store(false);
+    (void)image_embed_ptr; // multimodal stubbed pending mtmd API migration
 
-    // Tokenize the prompt
-    const int n_prompt_max = prompt.size() + 256;
+    // Tokenize prompt
+    const int n_prompt_max = (int)prompt.size() + 256;
     std::vector<llama_token> tokens(n_prompt_max);
-    int n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
-                                   tokens.data(), n_prompt_max, true, true);
+    int n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t)prompt.size(),
+                                  tokens.data(), n_prompt_max, true, true);
     if (n_tokens < 0) {
         n_tokens = -n_tokens;
         tokens.resize(n_tokens);
-        n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
-                                   tokens.data(), n_tokens, true, true);
+        n_tokens = llama_tokenize(vocab, prompt.c_str(), (int32_t)prompt.size(),
+                                  tokens.data(), n_tokens, true, true);
     } else {
         tokens.resize(n_tokens);
     }
 
-    LOGI("Prompt tokens: %d, generating up to %d tokens", n_tokens, max_tokens);
+    bool use_speculative = (draft_ctx_ptr != 0) && (n_draft > 0);
+    LOGI("Prompt tokens=%d max_new=%d spec=%s n_draft=%d batch=%d ubatch=%d",
+         n_tokens, (int)max_tokens, use_speculative ? "ON" : "OFF",
+         (int)n_draft, (int)batch_size, (int)ubatch_size);
 
-    // Kotlin sends a complete prompt, including recent chat history, on each
-    // request. Start from a clean KV cache so prior requests are not replayed
-    // underneath that full prompt.
+    auto t_start = std::chrono::steady_clock::now();
+
+    // Clear target KV and process prompt (positions start at 0 after each call)
     llama_memory_clear(llama_get_memory(ctx), true);
-    int n_past = 0;
     g_n_past[ctx] = 0;
 
-    // image_embed_ptr intentionally ignored — multimodal stubbed pending mtmd API migration
-    (void)image_embed_ptr;
-
-    if (n_past + n_tokens > llama_n_ctx(ctx)) {
-        // Context full — clear KV cache and restart
-        llama_memory_clear(llama_get_memory(ctx), true);
-        g_n_past[ctx] = 0;
-        n_past = 0;
-        LOGI("Context limit reached — KV cache cleared");
-    }
-
-    // Process prompt in a single batch
-    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    // Allocate batch large enough for both prompt pass and speculative verify pass
+    int batch_cap = std::max(n_tokens, (int)n_draft + 2);
+    llama_batch batch = llama_batch_init(batch_cap, 0, 1);
     for (int i = 0; i < n_tokens; i++) {
-        batch_add(batch, tokens[i], n_past + i, {0}, false);
+        batch_add(batch, tokens[i], i, {0}, false);
     }
     batch.logits[batch.n_tokens - 1] = true;
 
@@ -359,59 +424,244 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         return;
     }
 
-    // Set up sampler chain
+    auto t_after_prompt = std::chrono::steady_clock::now();
+    double prompt_secs = std::chrono::duration<double>(t_after_prompt - t_start).count();
+    float prompt_tps = (prompt_secs > 0.0) ? (float)(n_tokens / prompt_secs) : 0.0f;
+
+    // Target sampler chain
     llama_sampler *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
-        64,              // penalty_last_n
-        repeat_penalty,  // penalty_repeat
-        0.0f,            // penalty_freq
-        0.0f             // penalty_present
-    ));
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
 
-    int n_decode = 0;
-    llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
+    static const char* STOP_STRINGS[] = {
+        "<|eot_id|>", "<|end_of_text|>", "<|im_end|>", "</s>", "<|end|>", "[/INST]", nullptr
+    };
 
-    while (n_decode < max_tokens && !g_stop_generation.load()) {
-        if (llama_vocab_is_eog(vocab, new_token_id)) {
-            break;
+    int  n_decode         = 0;
+    int  n_accepted_total = 0;
+    int  n_drafted_total  = 0;
+    long long ttft_ms     = -1LL;
+    std::string accumulated;
+
+    // Returns false when generation should stop (EOG or stop string matched)
+    auto emit_token = [&](llama_token tok) -> bool {
+        if (llama_vocab_is_eog(vocab, tok)) return false;
+        if (ttft_ms < 0) {
+            auto now = std::chrono::steady_clock::now();
+            ttft_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now - t_start).count();
         }
-
         char buf[256];
-        int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
-        if (n > 0) {
-            std::string token_text(buf, n);
-            jstring j_token = env->NewStringUTF(token_text.c_str());
-            env->CallVoidMethod(callback, invokeMethod, j_token);
-            env->DeleteLocalRef(j_token);
-
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-                break;
-            }
+        int n = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
+        if (n <= 0) return true;
+        std::string piece(buf, n);
+        accumulated += piece;
+        for (int si = 0; STOP_STRINGS[si]; ++si) {
+            if (accumulated.find(STOP_STRINGS[si]) != std::string::npos) return false;
         }
+        if (accumulated.size() > 64) accumulated = accumulated.substr(accumulated.size() - 32);
+        jstring j_tok = env->NewStringUTF(piece.c_str());
+        env->CallVoidMethod(callback, onTokenMethod, j_tok);
+        env->DeleteLocalRef(j_tok);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+        return true;
+    };
 
-        batch_clear(batch);
-        batch_add(batch, new_token_id, n_past + n_tokens + n_decode, {0}, true);
-
-        if (llama_decode(ctx, batch) != 0) {
-            g_last_error = "Decode failed during generation";
-            LOGE("Decode failed at token %d", n_decode);
-            break;
+    // Process prompt on draft context if speculative decoding is requested
+    if (use_speculative) {
+        llama_context *draft_ctx = reinterpret_cast<llama_context *>(draft_ctx_ptr);
+        llama_memory_clear(llama_get_memory(draft_ctx), true);
+        llama_batch dp = llama_batch_init(n_tokens, 0, 1);
+        for (int i = 0; i < n_tokens; i++) {
+            batch_add(dp, tokens[i], i, {0}, false);
         }
-
-        new_token_id = llama_sampler_sample(smpl, ctx, 0);
-        n_decode++;
+        dp.logits[dp.n_tokens - 1] = true;
+        if (llama_decode(draft_ctx, dp) != 0) {
+            LOGE("Draft prompt decode failed — falling back to standard decoding");
+            use_speculative = false;
+        }
+        llama_batch_free(dp);
     }
 
-    LOGI("Generated %d tokens", n_decode);
+    // Sample first token from target (after prompt logits at last batch position)
+    llama_token current_token = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
-    g_n_past[ctx] = n_past + n_tokens + n_decode;
+    if (!use_speculative) {
+        // ── Standard autoregressive loop ─────────────────────────────────────
+        // Positions: prompt occupied [0, n_tokens-1]; decode starts at n_tokens
+        int n_pos = n_tokens;
+
+        while (n_decode < max_tokens && !g_stop_generation.load()) {
+            if (!emit_token(current_token)) break;
+            n_decode++;
+
+            batch_clear(batch);
+            batch_add(batch, current_token, n_pos++, {0}, true);
+            if (llama_decode(ctx, batch) != 0) {
+                LOGE("Decode failed at token %d", n_decode);
+                break;
+            }
+            current_token = llama_sampler_sample(smpl, ctx, 0);
+        }
+
+        g_n_past[ctx] = n_tokens + n_decode;
+
+    } else {
+        // ── Speculative decoding loop ─────────────────────────────────────────
+        // Both target and draft KV caches use the same 0-based position space.
+        // Prompt occupies [0, n_tokens-1]; decode tokens start at n_tokens.
+        // kv_head = next write position in both KV caches (always in sync).
+
+        llama_context *draft_ctx = reinterpret_cast<llama_context *>(draft_ctx_ptr);
+        const llama_vocab *draft_vocab =
+            llama_model_get_vocab(llama_get_model(draft_ctx));
+
+        // Greedy draft sampler — speed over quality
+        llama_sampler *draft_smpl = llama_sampler_chain_init(
+            llama_sampler_chain_default_params());
+        llama_sampler_chain_add(draft_smpl, llama_sampler_init_greedy());
+
+        int kv_head = n_tokens;
+
+        while (n_decode < max_tokens && !g_stop_generation.load()) {
+
+            // ── 1. Draft phase ────────────────────────────────────────────
+            // Feed current_token to draft at kv_head, then auto-regressively
+            // sample up to n_draft proposal tokens.
+            std::vector<llama_token> draft_tokens;
+            draft_tokens.reserve(n_draft);
+
+            {
+                llama_batch db = llama_batch_init(1, 0, 1);
+                batch_add(db, current_token, kv_head, {0}, true);
+                bool ok = (llama_decode(draft_ctx, db) == 0);
+                llama_batch_free(db);
+                if (!ok) { LOGE("Draft decode (seed) failed"); break; }
+            }
+
+            for (int i = 0; i < (int)n_draft; i++) {
+                llama_token d = llama_sampler_sample(draft_smpl, draft_ctx, 0);
+                if (llama_vocab_is_eog(draft_vocab, d)) break;
+                draft_tokens.push_back(d);
+                if (i < (int)n_draft - 1) {
+                    llama_batch db = llama_batch_init(1, 0, 1);
+                    batch_add(db, d, kv_head + 1 + i, {0}, true);
+                    bool ok = (llama_decode(draft_ctx, db) == 0);
+                    llama_batch_free(db);
+                    if (!ok) break;
+                }
+            }
+
+            int nd = (int)draft_tokens.size();
+            n_drafted_total += nd;
+
+            // ── 2. Verification phase ─────────────────────────────────────
+            // Submit [current_token, draft[0], …, draft[nd-1]] to target.
+            // Request logits at every position so we can compare/sample.
+            batch_clear(batch);
+            batch_add(batch, current_token, kv_head, {0}, true);
+            for (int i = 0; i < nd; i++) {
+                batch_add(batch, draft_tokens[i], kv_head + 1 + i, {0}, true);
+            }
+            if (llama_decode(ctx, batch) != 0) {
+                LOGE("Target verify decode failed");
+                break;
+            }
+
+            // ── 3. Emit current_token (always accepted from target) ───────
+            if (!emit_token(current_token)) {
+                // Trim back to kv_head (nothing accepted this round)
+                llama_memory_seq_rm(llama_get_memory(ctx),      0, kv_head, -1);
+                llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, kv_head, -1);
+                break;
+            }
+            n_decode++;
+
+            // ── 4. Accept / reject draft tokens ──────────────────────────
+            // logit at batch index i predicts the token AFTER batch[i],
+            // so sample(smpl, ctx, i) == expected draft_tokens[i].
+            int  n_acc     = 0;
+            bool rejected  = false;
+            bool stop_now  = false;
+            llama_token next_token = 0;
+
+            for (int i = 0; i < nd && n_decode < max_tokens
+                                   && !g_stop_generation.load(); i++) {
+                llama_token target_pred = llama_sampler_sample(smpl, ctx, i);
+
+                if (target_pred == draft_tokens[i]) {
+                    // Accept
+                    n_acc++;
+                    if (!emit_token(draft_tokens[i])) {
+                        // Stop signal inside an accepted draft token
+                        stop_now = true;
+                        break;
+                    }
+                    n_decode++;
+                } else {
+                    // Reject — target's correction becomes next current_token
+                    next_token = target_pred;
+                    rejected   = true;
+                    break;
+                }
+            }
+
+            if (!stop_now && !rejected) {
+                // All nd draft tokens accepted — sample bonus token from
+                // target logit at batch index nd (follows last draft token).
+                next_token = llama_sampler_sample(smpl, ctx, nd);
+                n_acc      = nd;
+            }
+
+            n_accepted_total += n_acc;
+
+            // Trim both KV caches: discard rejected positions [kv_head+n_acc+1, ∞)
+            // p1 = -1 means [p0, ∞) per the llama_memory_seq_rm contract.
+            llama_memory_seq_rm(llama_get_memory(ctx),       0, kv_head + n_acc + 1, -1);
+            llama_memory_seq_rm(llama_get_memory(draft_ctx), 0, kv_head + n_acc + 1, -1);
+            kv_head += n_acc + 1;
+
+            if (stop_now) break;
+            current_token = next_token;
+        }
+
+        g_n_past[ctx] = kv_head;
+        llama_sampler_free(draft_smpl);
+    }
+
+    // ── Stats reporting ───────────────────────────────────────────────────────
+    auto t_end = std::chrono::steady_clock::now();
+    double decode_secs = std::chrono::duration<double>(t_end - t_after_prompt).count();
+    float  tps         = (decode_secs > 0.0 && n_decode > 0)
+                         ? (float)(n_decode / decode_secs) : 0.0f;
+    if (ttft_ms < 0) ttft_ms = (long long)(prompt_secs * 1000.0);
+    float accept_rate = (n_drafted_total > 0)
+                        ? (float)n_accepted_total / (float)n_drafted_total : 0.0f;
+    std::string backend = backend_names();
+
+    LOGI("Generated %d tokens in %.2fs (%.1f TPS) | "
+         "prompt_tps=%.1f ttft=%lldms | "
+         "draft_accept=%.2f drafted=%d accepted=%d | backend=%s",
+         n_decode, decode_secs, tps, prompt_tps, ttft_ms,
+         accept_rate, n_drafted_total, n_accepted_total, backend.c_str());
+
+    if (onStatsMethod) {
+        jstring j_backend = env->NewStringUTF(backend.c_str());
+        env->CallVoidMethod(callback, onStatsMethod,
+                            (jfloat)tps,
+                            (jlong)ttft_ms,
+                            (jfloat)accept_rate,
+                            (jint)n_decode,
+                            (jfloat)prompt_tps,
+                            j_backend);
+        env->DeleteLocalRef(j_backend);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+
     g_last_error.clear();
-
     llama_sampler_free(smpl);
     llama_batch_free(batch);
 }

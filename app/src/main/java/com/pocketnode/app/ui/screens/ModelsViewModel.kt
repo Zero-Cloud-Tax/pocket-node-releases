@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pocketnode.app.data.ModelManager
 import com.pocketnode.app.data.model.LocalModel
+import com.pocketnode.app.data.model.ModelRole
+import com.pocketnode.app.data.model.RECOMMENDED_MODELS
 import com.pocketnode.app.data.model.RemoteModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -75,6 +77,8 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
             .setDestinationInExternalFilesDir(appContext, Environment.DIRECTORY_DOWNLOADS, "${remoteModel.name}.gguf")
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(true)
+            .addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
+            .addRequestHeader("Accept", "*/*")
 
         val downloadManager = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         cancelDuplicateDownloads(downloadManager, remoteModel.name)
@@ -84,7 +88,11 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         setDownloadState(remoteModel.name, DownloadState.Downloading(0f))
 
         viewModelScope.launch {
-            pollDownload(appContext, downloadManager, downloadId, remoteModel.name, destFile)
+            pollDownload(
+                appContext, downloadManager, downloadId, remoteModel.name, destFile,
+                role = remoteModel.defaultRole.name,
+                family = remoteModel.family
+            )
         }
     }
 
@@ -106,7 +114,9 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         downloadManager: DownloadManager,
         downloadId: Long,
         modelName: String,
-        destFile: File
+        destFile: File,
+        role: String = ModelRole.MAIN.name,
+        family: String? = null
     ) {
         while (true) {
             delay(500)
@@ -140,10 +150,10 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
                     } else {
                         destFile
                     }
-                    
+
                     setDownloadState(modelName, DownloadState.Importing)
                     activeDownloadIds.remove(downloadId)
-                    importFromPath(context, actualFile, modelName, replaceExisting = true)
+                    importFromPath(context, actualFile, modelName, replaceExisting = true, role = role, family = family)
                     setDownloadState(modelName, DownloadState.Done)
                     return
                 }
@@ -160,7 +170,9 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         context: Context,
         sourceFile: File,
         modelName: String,
-        replaceExisting: Boolean = false
+        replaceExisting: Boolean = false,
+        role: String = ModelRole.MAIN.name,
+        family: String? = null
     ) {
         val existing = models.value.firstOrNull {
             normalizedModelName(it.name) == normalizedModelName(modelName) && File(it.path).exists()
@@ -182,7 +194,9 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
                 id = existing?.id ?: UUID.randomUUID().toString(),
                 name = modelName,
                 path = appModelFile.absolutePath,
-                contextLength = 2048
+                contextLength = 2048,
+                role = role,
+                family = family
             )
         )
     }
@@ -234,11 +248,14 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
             cleanupDownloadManager(downloadManager)
             dedupeStoredModels()
 
-            val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: return@launch
-            val downloadedModels = downloadDir
-                .listFiles { file -> file.isFile && file.extension.equals("gguf", ignoreCase = true) }
-                ?.toList()
-                .orEmpty()
+            // Scan both the app-private downloads dir and the public Downloads folder
+            val privateDlDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            val publicDlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val scanDirs = listOfNotNull(privateDlDir, publicDlDir)
+            val downloadedModels = scanDirs.flatMap { dir ->
+                dir.listFiles { file -> file.isFile && file.extension.equals("gguf", ignoreCase = true) }
+                    ?.toList().orEmpty()
+            }.distinctBy { it.canonicalPath }
             val knownNames = models.value
                 .filter { File(it.path).exists() }
                 .map { normalizedModelName(it.name) }
@@ -249,8 +266,16 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
                 val normalizedName = normalizedModelName(modelName)
                 if (normalizedName !in knownNames) {
                     try {
+                        // Resolve role/family from RECOMMENDED_MODELS if filename matches
+                        val matchedRemote = RECOMMENDED_MODELS.firstOrNull { remote ->
+                            normalizedModelName(remote.name) == normalizedName ||
+                            normalizedModelName(remote.huggingFaceUrl.substringAfterLast("/").substringBefore("?")) == normalizedName
+                        }
+                        val role = matchedRemote?.defaultRole?.name ?: ModelRole.MAIN.name
+                        val family = matchedRemote?.family
+
                         setDownloadState(modelName, DownloadState.Importing)
-                        importFromPath(context, file, modelName)
+                        importFromPath(context, file, modelName, role = role, family = family)
                         setDownloadState(modelName, DownloadState.Done)
                         knownNames += normalizedName
                     } catch (e: Exception) {

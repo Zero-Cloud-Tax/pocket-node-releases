@@ -4,8 +4,9 @@ project("pocketnode" CXX C)
 set(CMAKE_CXX_STANDARD 17)
 
 # Android Native Release Profiling
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG")
+# armv8.4-a+dotprod+i8mm unlocks KleidiAI INT8/FP16 kernels on Snapdragon 8 Gen 3
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
 
 # ============================================================
 # llama.cpp — fetch and build from source via FetchContent

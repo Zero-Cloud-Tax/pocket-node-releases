@@ -24,6 +24,13 @@ private object Keys {
     val EDGE_API_ENABLED = booleanPreferencesKey("edge_api_enabled")
     val GPU_LAYERS = intPreferencesKey("gpu_layers")
     val API_KEY = stringPreferencesKey("api_key")
+    // Speculative decoding
+    val SPECULATIVE_ENABLED     = booleanPreferencesKey("speculative_enabled")
+    val DRAFT_MODEL_ID          = stringPreferencesKey("draft_model_id")
+    val SPECULATIVE_DRAFT_COUNT = intPreferencesKey("speculative_draft_count")
+    val BATCH_SIZE              = intPreferencesKey("batch_size")
+    val UBATCH_SIZE             = intPreferencesKey("ubatch_size")
+    val BENCHMARK_MODE          = booleanPreferencesKey("benchmark_mode")
 }
 
 class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewModel() {
@@ -69,6 +76,25 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val apiKey: StateFlow<String> = _prefs.map { it[Keys.API_KEY] ?: "" }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    // Speculative decoding
+    val speculativeEnabled: StateFlow<Boolean> = _prefs.map { it[Keys.SPECULATIVE_ENABLED] ?: false }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val draftModelId: StateFlow<String> = _prefs.map { it[Keys.DRAFT_MODEL_ID] ?: "" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
+    val speculativeDraftCount: StateFlow<Int> = _prefs.map { it[Keys.SPECULATIVE_DRAFT_COUNT] ?: 5 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 5)
+
+    val batchSize: StateFlow<Int> = _prefs.map { it[Keys.BATCH_SIZE] ?: 512 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 512)
+
+    val ubatchSize: StateFlow<Int> = _prefs.map { it[Keys.UBATCH_SIZE] ?: 128 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 128)
+
+    val benchmarkMode: StateFlow<Boolean> = _prefs.map { it[Keys.BENCHMARK_MODE] ?: false }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     val selectedTemplate: StateFlow<PromptTemplate> = templateName.map { name ->
         when (name) {
             "Llama3" -> PromptTemplate.Llama3
@@ -88,6 +114,12 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     fun setEdgeApiEnabled(v: Boolean) = save { it[Keys.EDGE_API_ENABLED] = v }
     fun setGpuLayers(v: Int) = save { it[Keys.GPU_LAYERS] = v.coerceAtLeast(0) }
     fun setApiKey(v: String) = save { it[Keys.API_KEY] = v }
+    fun setSpeculativeEnabled(v: Boolean) = save { it[Keys.SPECULATIVE_ENABLED] = v }
+    fun setDraftModelId(v: String) = save { it[Keys.DRAFT_MODEL_ID] = v }
+    fun setSpeculativeDraftCount(v: Int) = save { it[Keys.SPECULATIVE_DRAFT_COUNT] = v.coerceIn(1, 16) }
+    fun setBatchSize(v: Int) = save { it[Keys.BATCH_SIZE] = v.coerceIn(128, 1024) }
+    fun setUbatchSize(v: Int) = save { it[Keys.UBATCH_SIZE] = v.coerceIn(32, 256) }
+    fun setBenchmarkMode(v: Boolean) = save { it[Keys.BENCHMARK_MODE] = v }
 
     private fun save(block: (MutablePreferences) -> Unit) {
         viewModelScope.launch { dataStore.edit(block) }

@@ -18,17 +18,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.licensing.LicenseManager
 import com.pocketnode.app.licensing.ProGate
 import kotlinx.coroutines.launch
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     settings: SettingsViewModel,
     licenseManager: LicenseManager,
     isPro: Boolean,
+    draftModels: List<LocalModel> = emptyList(),
     onNavigateToUpgrade: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -45,6 +48,12 @@ fun SettingsScreen(
     val edgeApiEnabled by settings.edgeApiEnabled.collectAsState()
     val gpuLayers by settings.gpuLayers.collectAsState()
     val apiKey by settings.apiKey.collectAsState()
+    val speculativeEnabled by settings.speculativeEnabled.collectAsState()
+    val draftModelId by settings.draftModelId.collectAsState()
+    val speculativeDraftCount by settings.speculativeDraftCount.collectAsState()
+    val batchSize by settings.batchSize.collectAsState()
+    val ubatchSize by settings.ubatchSize.collectAsState()
+    val benchmarkMode by settings.benchmarkMode.collectAsState()
 
     var licenseInput by remember { mutableStateOf("") }
     var licenseStatus by remember { mutableStateOf<Boolean?>(null) }
@@ -113,6 +122,132 @@ fun SettingsScreen(
                 steps = 99,
                 onValueChange = { settings.setGpuLayers(it.toInt()) }
             )
+        }
+
+        // ── Speculative Decoding ──
+        SettingsSection("Speculative Decoding") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Enable Speculative Decoding",
+                        style = MaterialTheme.typography.bodyLarge)
+                    Text("Uses a small draft model to boost TPS",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = speculativeEnabled,
+                    onCheckedChange = { settings.setSpeculativeEnabled(it) }
+                )
+            }
+
+            if (speculativeEnabled) {
+                Spacer(Modifier.height(4.dp))
+
+                // Draft model picker
+                var draftMenuExpanded by remember { mutableStateOf(false) }
+                val selectedDraftName = draftModels
+                    .firstOrNull { it.id.toString() == draftModelId || it.path == draftModelId }
+                    ?.name ?: if (draftModelId.isBlank()) "None" else "Unknown"
+
+                ExposedDropdownMenuBox(
+                    expanded = draftMenuExpanded,
+                    onExpandedChange = { draftMenuExpanded = !draftMenuExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = selectedDraftName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Draft Model") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = draftMenuExpanded)
+                        },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable, enabled = true)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = draftMenuExpanded,
+                        onDismissRequest = { draftMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = {
+                                settings.setDraftModelId("")
+                                draftMenuExpanded = false
+                            }
+                        )
+                        draftModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model.name) },
+                                onClick = {
+                                    settings.setDraftModelId(model.path)
+                                    draftMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (draftModels.isEmpty()) {
+                    Text(
+                        "No draft models installed. Download SmolLM3 135M from Model Hub.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                LabeledSlider(
+                    label = "Draft Count",
+                    value = speculativeDraftCount.toFloat(),
+                    displayValue = "$speculativeDraftCount tokens",
+                    range = 1f..16f,
+                    steps = 14,
+                    onValueChange = { settings.setSpeculativeDraftCount(it.toInt()) }
+                )
+                LabeledSlider(
+                    label = "Batch Size",
+                    value = batchSize.toFloat(),
+                    displayValue = "$batchSize",
+                    range = 128f..1024f,
+                    steps = 7,
+                    onValueChange = { settings.setBatchSize((it / 128).toInt() * 128) }
+                )
+                LabeledSlider(
+                    label = "µBatch Size",
+                    value = ubatchSize.toFloat(),
+                    displayValue = "$ubatchSize",
+                    range = 32f..256f,
+                    steps = 6,
+                    onValueChange = { settings.setUbatchSize((it / 32).toInt() * 32) }
+                )
+            }
+        }
+
+        // ── Benchmark Mode ──
+        SettingsSection("Developer") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Benchmark Mode", style = MaterialTheme.typography.bodyLarge)
+                    Text("Show TPS · TTFT · draft accept rate after each reply",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = benchmarkMode,
+                    onCheckedChange = { settings.setBenchmarkMode(it) }
+                )
+            }
         }
 
         // ── System Prompt ──

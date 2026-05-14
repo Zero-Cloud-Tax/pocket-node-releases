@@ -173,6 +173,10 @@ object ApiServer {
                             writer.write(json.encodeToString(TokenChunk(token)) + "\n")
                             writer.flush()
                         }
+                        override fun onStats(
+                            tps: Float, ttftMs: Long, draftAcceptRate: Float,
+                            totalTokens: Int, promptEvalTps: Float, backendName: String
+                        ) { /* Edge API stats not surfaced over HTTP */ }
                     }
                     try {
                         app.inference.nativeGenerate(
@@ -184,6 +188,10 @@ object ApiServer {
                             topP = topP,
                             topK = topK,
                             repeatPenalty = repeatPenalty,
+                            draftCtxPtr = 0L,
+                            nDraft = 0,
+                            batchSize = 512,
+                            ubatchSize = 128,
                             callback = callback
                         )
                     } catch (_: Exception) {
