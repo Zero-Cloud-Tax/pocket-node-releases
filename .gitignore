@@ -24,7 +24,8 @@ local.properties
 /local.properties
 keystore.properties
 *.jks
-release.keystore
+*.keystore
+keystore.secrets
 
 # Runtime logs / dumps / screenshots
 logcat*.txt
