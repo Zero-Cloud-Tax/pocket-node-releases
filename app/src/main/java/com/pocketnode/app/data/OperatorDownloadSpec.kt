@@ -20,7 +20,7 @@ val OPERATOR_SPEC: ModelDownloadSpec? = BuildConfig.POCKETNODE_OPERATOR_URL
             displayName = "PocketNode Operator",
             filename = "PocketNode_Operator_Q4_0.gguf",
             url = it,
-            expectedSha256 = null,
+            expectedSha256 = "b1de55dff5815fc0dd898491295b064e7fea07368d603c82740288f8d3bb50ba",
             sizeBytes = null
         )
     }
