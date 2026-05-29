@@ -51,7 +51,9 @@ android {
         val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
         buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
         buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
-        val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL") ?: ""
+        // TEST URL: SmolLM2 135M (88 MB real GGUF) — replace with production URL before release
+        val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
+            ?: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf"
         buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
     }
 
