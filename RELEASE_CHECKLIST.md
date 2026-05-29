@@ -128,17 +128,17 @@ Copy-Item app/build/outputs/apk/release/app-release.apk release-artifacts/Pocket
 
 | Field           | Value                                                              |
 |-----------------|---------------------------------------------------------------------|
-| Version         | 0.1.0-rc1 (versionCode 3)                                          |
-| APK filename    | `PocketNode-0.1.0-rc1-signed.apk`                                  |
-| Model           | `PocketNode_Operator_Q4_0.gguf`                                     |
-| Model SHA-256   | `b1de55dff5815fc0dd898491295b064e7fea07368d603c82740288f8d3bb50ba` |
-| Model size      | 1,805,819,328 bytes (1.68 GB)                                       |
-| Hash computed   | 2026-05-29                                                          |
-| Operator URL    | _(set `POCKETNODE_OPERATOR_URL` before release build)_              |
-| Device tested   | Samsung Galaxy Z Fold 6 / SM-F956U                                  |
-| Test date       | _(fill in after smoke test)_                                        |
-| Result          | _(pass / fail)_                                                     |
-| Profile applied | CPU / 4 threads / GPU layers 0 / speculative off / ChatML           |
+| Version         | 0.1.0-rc1 (versionCode 3)                                                                                              |
+| APK filename    | `PocketNode-0.1.0-rc1-signed.apk`                                                                                      |
+| Model           | `PocketNode_Operator_Q4_0.gguf`                                                                                        |
+| Model SHA-256   | `b1de55dff5815fc0dd898491295b064e7fea07368d603c82740288f8d3bb50ba`                                                    |
+| Model size      | 1,805,819,328 bytes (1.68 GB)                                                                                          |
+| Hash computed   | 2026-05-29                                                                                                             |
+| Operator URL    | `https://huggingface.co/GsxrGuy80s/PocketNode-Operator-GGUF/resolve/main/PocketNode_Operator_Q4_0.gguf`               |
+| Device tested   | Samsung Galaxy Z Fold 6 / SM-F956U                                                                                     |
+| Test date       | 2026-05-29                                                                                                             |
+| Result          | **PASS** — all 15 acceptance gates passed                                                                              |
+| Profile applied | CPU / 4 threads / GPU layers 0 / speculative off / ChatML                                                              |
 
 ## Post-release
 
