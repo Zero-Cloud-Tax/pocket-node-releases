@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.pocketnode.app.BuildConfig
 import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.licensing.LicenseManager
 import com.pocketnode.app.licensing.ProGate
@@ -32,7 +33,8 @@ fun SettingsScreen(
     licenseManager: LicenseManager,
     isPro: Boolean,
     draftModels: List<LocalModel> = emptyList(),
-    onNavigateToUpgrade: () -> Unit
+    onNavigateToUpgrade: () -> Unit,
+    onNavigateToDiagnostics: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -247,6 +249,27 @@ fun SettingsScreen(
                     checked = benchmarkMode,
                     onCheckedChange = { settings.setBenchmarkMode(it) }
                 )
+            }
+            if (benchmarkMode || BuildConfig.DEBUG) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                TextButton(
+                    onClick = onNavigateToDiagnostics,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "Engine Diagnostics",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "Real-time memory, thermal, model, and inference telemetry",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 

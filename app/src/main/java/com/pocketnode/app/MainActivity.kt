@@ -42,6 +42,8 @@ import com.pocketnode.app.ui.screens.ModelsScreen
 import com.pocketnode.app.ui.screens.ModelsViewModel
 import com.pocketnode.app.ui.screens.RecommendedProfileScreen
 import com.pocketnode.app.ui.screens.SetupRequiredScreen
+import com.pocketnode.app.diagnostics.DiagnosticsViewModel
+import com.pocketnode.app.ui.screens.DiagnosticsScreen
 import com.pocketnode.app.ui.screens.SettingsScreen
 import com.pocketnode.app.ui.screens.SettingsViewModel
 import com.pocketnode.app.ui.screens.UpgradeScreen
@@ -164,6 +166,7 @@ class MainActivity : ComponentActivity() {
                     currentRoute == "settings" -> "Settings"
                     currentRoute == "upgrade" -> "Go Pro"
                     currentRoute == "setup" -> "Welcome"
+                    currentRoute == "diagnostics" -> "Diagnostics"
                     else -> "Pocket Node"
                 }
                 // Show back on setup only when the user reached RecommendedProfileScreen via import
@@ -449,7 +452,25 @@ class MainActivity : ComponentActivity() {
                                     licenseManager = app.licenseManager,
                                     isPro = isPro,
                                     draftModels = draftModels,
-                                    onNavigateToUpgrade = { navController.navigate("upgrade") }
+                                    onNavigateToUpgrade = { navController.navigate("upgrade") },
+                                    onNavigateToDiagnostics = { navController.navigate("diagnostics") }
+                                )
+                            }
+
+                            composable("diagnostics") {
+                                val diagFactory = remember(settingsVm) {
+                                    object : ViewModelProvider.Factory {
+                                        @Suppress("UNCHECKED_CAST")
+                                        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                                            DiagnosticsViewModel(app, settingsVm, modelManager) as T
+                                    }
+                                }
+                                val diagVm: DiagnosticsViewModel = viewModel(factory = diagFactory)
+                                DiagnosticsScreen(
+                                    vm = diagVm,
+                                    lastInferenceStats = chatVm.lastInferenceStats.value,
+                                    activeModelName = chatVm.modelName.value,
+                                    backendName = chatVm.backendName.value
                                 )
                             }
 
