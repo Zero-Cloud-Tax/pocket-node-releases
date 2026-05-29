@@ -19,6 +19,10 @@ captures/
 app-debug.apk
 PocketNodeLite.apk
 
+# Release pipeline — never commit model files or signed APKs
+release-assets/*.gguf
+release-artifacts/*.apk
+
 # Local machine secrets/config
 local.properties
 /local.properties

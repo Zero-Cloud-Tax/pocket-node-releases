@@ -13,6 +13,9 @@
   ```
   Should return nothing.
 - [ ] Set real SHA-256 in `OPERATOR_SPEC.expectedSha256` if the operator model hash is known
+  - Known hash for `PocketNode_Operator_Q4_0.gguf`:
+    `b1de55dff5815fc0dd898491295b064e7fea07368d603c82740288f8d3bb50ba`
+  - Registered in `HashUtils.KNOWN_HASHES` — badge will show **Verified** automatically
 
 ## Build
 
@@ -46,7 +49,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 - [ ] Cancel download — `.part` file is deleted, no `.gguf` appears
 - [ ] Restart download — progress resumes from zero
 - [ ] Download completes — `.part` renames to `.gguf`
-- [ ] Hashing runs — badge shows `Unknown Hash` (not `Verified` unless `expectedSha256` is set)
+- [ ] Hashing runs — badge shows **Verified** for `PocketNode_Operator_Q4_0.gguf` (hash registered in `HashUtils.KNOWN_HASHES`)
 - [ ] Screen transitions to "Recommended for this device"
 
 ### First-run — model present at startup
@@ -103,8 +106,42 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 - [ ] Fold the phone mid-generation — no crash
 - [ ] Unfold — UI state is correct
 
+## Release artifact
+
+```powershell
+# Build with production URL
+$env:POCKETNODE_OPERATOR_URL = "https://..."   # fill in after hosting
+./gradlew clean assembleRelease
+
+# Rename to canonical release filename
+Copy-Item app/build/outputs/apk/release/app-release.apk release-artifacts/PocketNode-0.1.0-rc1-signed.apk
+
+# Verify signing
+& "$env:ANDROID_HOME\build-tools\35.0.0\apksigner.bat" verify --verbose release-artifacts/PocketNode-0.1.0-rc1-signed.apk
+# Expected: "Verified using v2 scheme (APK Signature Scheme v2): true"
+```
+
+- [ ] APK output: `release-artifacts/PocketNode-0.1.0-rc1-signed.apk`
+- [ ] Signing: v2 scheme, 1 signer ✓ (confirmed 2026-05-29)
+
+## Release record
+
+| Field           | Value                                                              |
+|-----------------|---------------------------------------------------------------------|
+| Version         | 0.1.0-rc1 (versionCode 3)                                          |
+| APK filename    | `PocketNode-0.1.0-rc1-signed.apk`                                  |
+| Model           | `PocketNode_Operator_Q4_0.gguf`                                     |
+| Model SHA-256   | `b1de55dff5815fc0dd898491295b064e7fea07368d603c82740288f8d3bb50ba` |
+| Model size      | 1,805,819,328 bytes (1.68 GB)                                       |
+| Hash computed   | 2026-05-29                                                          |
+| Operator URL    | _(set `POCKETNODE_OPERATOR_URL` before release build)_              |
+| Device tested   | Samsung Galaxy Z Fold 6 / SM-F956U                                  |
+| Test date       | _(fill in after smoke test)_                                        |
+| Result          | _(pass / fail)_                                                     |
+| Profile applied | CPU / 4 threads / GPU layers 0 / speculative off / ChatML           |
+
 ## Post-release
 
 - [ ] Tag release commit: `git tag v0.1.0-rc1`
-- [ ] Upload signed APK to distribution channel
-- [ ] Verify production operator URL serves the correct file
+- [ ] Upload `release-artifacts/PocketNode-0.1.0-rc1-signed.apk` to distribution channel
+- [ ] Verify production operator URL serves the correct file (SHA-256 must match hash above)

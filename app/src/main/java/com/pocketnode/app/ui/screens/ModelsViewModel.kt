@@ -586,12 +586,18 @@ class ModelsViewModel(
 
         try {
             val hash = HashUtils.sha256(file)
+            val baseName = file.nameWithoutExtension
+            val knownHash = HashUtils.KNOWN_HASHES[baseName]
+            val status = when {
+                knownHash == null -> VerificationStatus.UNKNOWN_HASH
+                knownHash.equals(hash, ignoreCase = true) -> VerificationStatus.VERIFIED
+                else -> VerificationStatus.FAILED
+            }
             modelManager.addModel(model.copy(
                 sha256 = hash,
                 sizeBytes = currentSize,
                 lastModified = currentMtime,
-                // No known-hash map — report UNKNOWN_HASH rather than VERIFIED
-                verificationStatus = VerificationStatus.UNKNOWN_HASH,
+                verificationStatus = status,
                 lastCheckedAt = System.currentTimeMillis()
             ))
         } catch (_: Exception) {
