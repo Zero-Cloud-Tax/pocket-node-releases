@@ -8,7 +8,9 @@ interface LlamaCallback {
         draftAcceptRate: Float,   // 0.0f if non-speculative
         totalTokens: Int,
         promptEvalTps: Float,
-        backendName: String
+        backendName: String,
+        nDrafted: Int,            // total tokens proposed by draft model (0 if non-speculative)
+        nAccepted: Int            // total draft tokens accepted by main model
     )
 }
 
@@ -58,6 +60,7 @@ class LlamaInference {
     external fun nativeGetVocabSize(modelPtr: Long): Int
     external fun nativeGetLastError(): String
     external fun nativeGetBackendName(): String
+    external fun nativeGetModelMetadata(contextPtr: Long): Array<String>?
     external fun nativeCloseFd(fd: Int)
 
     // ── Multi-Modal ─────────────────────────────────────────────────────────

@@ -123,13 +123,48 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGetLastError(
 }
 
 // =========================================================================
-// Backend query
+// Backend query and Metadata
 // =========================================================================
 
 JNIEXPORT jstring JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeGetBackendName(
         JNIEnv *env, jobject /* this */) {
     return env->NewStringUTF(backend_names().c_str());
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_pocketnode_app_inference_LlamaInference_nativeGetModelMetadata(
+        JNIEnv *env, jobject /* this */, jlong ctx_ptr) {
+    if (ctx_ptr == 0) return nullptr;
+    llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
+    const llama_model *model = llama_get_model(ctx);
+
+    auto get_meta = [&](const char *key) -> std::string {
+        int32_t len = llama_model_meta_val_str(model, key, nullptr, 0);
+        if (len <= 0) return "";
+        std::vector<char> buf(len + 1);
+        llama_model_meta_val_str(model, key, buf.data(), buf.size());
+        return std::string(buf.data(), len);
+    };
+
+    std::string arch = get_meta("general.architecture");
+    std::string name = get_meta("general.name");
+    std::string tokenizer = get_meta("tokenizer.ggml.model");
+    std::string chat_template = get_meta("tokenizer.chat_template");
+    int vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    std::string vocab_size_str = std::to_string(vocab_size);
+    LOGI("ModelMetadata: arch=%s name=%s tokenizer=%s vocab=%d",
+         arch.c_str(), name.c_str(), tokenizer.c_str(), vocab_size);
+
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray result = env->NewObjectArray(5, stringClass, env->NewStringUTF(""));
+    env->SetObjectArrayElement(result, 0, env->NewStringUTF(arch.c_str()));
+    env->SetObjectArrayElement(result, 1, env->NewStringUTF(name.c_str()));
+    env->SetObjectArrayElement(result, 2, env->NewStringUTF(tokenizer.c_str()));
+    env->SetObjectArrayElement(result, 3, env->NewStringUTF(vocab_size_str.c_str()));
+    env->SetObjectArrayElement(result, 4, env->NewStringUTF(chat_template.c_str()));
+
+    return result;
 }
 
 // =========================================================================
@@ -374,7 +409,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Resolve callback methods
     jclass callbackClass = env->GetObjectClass(callback);
     jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
-    jmethodID onStatsMethod = env->GetMethodID(callbackClass, "onStats", "(FJFIFLjava/lang/String;)V");
+    jmethodID onStatsMethod = env->GetMethodID(callbackClass, "onStats", "(FJFIFLjava/lang/String;II)V");
     if (!onTokenMethod) {
         g_last_error = "Cannot find callback onToken method";
         LOGE("%s", g_last_error.c_str());
@@ -409,19 +444,22 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     llama_memory_clear(llama_get_memory(ctx), true);
     g_n_past[ctx] = 0;
 
-    // Allocate batch large enough for both prompt pass and speculative verify pass
-    int batch_cap = std::max(n_tokens, (int)n_draft + 2);
+    // Allocate batch large enough for prompt processing (chunked) and speculative verify pass
+    int batch_cap = std::max((int)batch_size, (int)n_draft + 2);
     llama_batch batch = llama_batch_init(batch_cap, 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        batch_add(batch, tokens[i], i, {0}, false);
-    }
-    batch.logits[batch.n_tokens - 1] = true;
-
-    if (llama_decode(ctx, batch) != 0) {
-        g_last_error = "Decode failed during prompt processing";
-        LOGE("%s", g_last_error.c_str());
-        llama_batch_free(batch);
-        return;
+    for (int i = 0; i < n_tokens; i += batch_size) {
+        int n_eval = std::min((int)batch_size, n_tokens - i);
+        batch_clear(batch);
+        for (int j = 0; j < n_eval; j++) {
+            bool is_last = (i + j == n_tokens - 1);
+            batch_add(batch, tokens[i + j], i + j, {0}, is_last);
+        }
+        if (llama_decode(ctx, batch) != 0) {
+            g_last_error = "Decode failed during prompt processing";
+            LOGE("%s", g_last_error.c_str());
+            llama_batch_free(batch);
+            return;
+        }
     }
 
     auto t_after_prompt = std::chrono::steady_clock::now();
@@ -474,16 +512,23 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     if (use_speculative) {
         llama_context *draft_ctx = reinterpret_cast<llama_context *>(draft_ctx_ptr);
         llama_memory_clear(llama_get_memory(draft_ctx), true);
-        llama_batch dp = llama_batch_init(n_tokens, 0, 1);
-        for (int i = 0; i < n_tokens; i++) {
-            batch_add(dp, tokens[i], i, {0}, false);
-        }
-        dp.logits[dp.n_tokens - 1] = true;
-        if (llama_decode(draft_ctx, dp) != 0) {
-            LOGE("Draft prompt decode failed — falling back to standard decoding");
-            use_speculative = false;
+        llama_batch dp = llama_batch_init(batch_size, 0, 1);
+        bool draft_ok = true;
+        for (int i = 0; i < n_tokens; i += batch_size) {
+            int n_eval = std::min((int)batch_size, n_tokens - i);
+            batch_clear(dp);
+            for (int j = 0; j < n_eval; j++) {
+                bool is_last = (i + j == n_tokens - 1);
+                batch_add(dp, tokens[i + j], i + j, {0}, is_last);
+            }
+            if (llama_decode(draft_ctx, dp) != 0) {
+                LOGE("Draft prompt decode failed - falling back to standard decoding");
+                draft_ok = false;
+                break;
+            }
         }
         llama_batch_free(dp);
+        if (!draft_ok) use_speculative = false;
     }
 
     // Sample first token from target (after prompt logits at last batch position)
@@ -525,6 +570,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         llama_sampler_chain_add(draft_smpl, llama_sampler_init_greedy());
 
         int kv_head = n_tokens;
+        llama_batch db = llama_batch_init(1, 0, 1);
 
         while (n_decode < max_tokens && !g_stop_generation.load()) {
 
@@ -535,11 +581,9 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
             draft_tokens.reserve(n_draft);
 
             {
-                llama_batch db = llama_batch_init(1, 0, 1);
+                batch_clear(db);
                 batch_add(db, current_token, kv_head, {0}, true);
-                bool ok = (llama_decode(draft_ctx, db) == 0);
-                llama_batch_free(db);
-                if (!ok) { LOGE("Draft decode (seed) failed"); break; }
+                if (llama_decode(draft_ctx, db) != 0) { LOGE("Draft decode (seed) failed"); break; }
             }
 
             for (int i = 0; i < (int)n_draft; i++) {
@@ -547,11 +591,9 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
                 if (llama_vocab_is_eog(draft_vocab, d)) break;
                 draft_tokens.push_back(d);
                 if (i < (int)n_draft - 1) {
-                    llama_batch db = llama_batch_init(1, 0, 1);
+                    batch_clear(db);
                     batch_add(db, d, kv_head + 1 + i, {0}, true);
-                    bool ok = (llama_decode(draft_ctx, db) == 0);
-                    llama_batch_free(db);
-                    if (!ok) break;
+                    if (llama_decode(draft_ctx, db) != 0) break;
                 }
             }
 
@@ -630,6 +672,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 
         g_n_past[ctx] = kv_head;
         llama_sampler_free(draft_smpl);
+        llama_batch_free(db);
     }
 
     // ── Stats reporting ───────────────────────────────────────────────────────
@@ -656,7 +699,9 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
                             (jfloat)accept_rate,
                             (jint)n_decode,
                             (jfloat)prompt_tps,
-                            j_backend);
+                            j_backend,
+                            (jint)n_drafted_total,
+                            (jint)n_accepted_total);
         env->DeleteLocalRef(j_backend);
         if (env->ExceptionCheck()) env->ExceptionClear();
     }

@@ -10,7 +10,7 @@ import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.data.model.Conversation
 import com.pocketnode.app.data.model.LocalModel
 
-@Database(entities = [LocalModel::class, ChatMessage::class, Conversation::class], version = 4, exportSchema = false)
+@Database(entities = [LocalModel::class, ChatMessage::class, Conversation::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun modelDao(): ModelDao
     abstract fun chatDao(): ChatDao
@@ -73,6 +73,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE models ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE models ADD COLUMN sha256 TEXT")
+                db.execSQL("ALTER TABLE models ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'NOT_CHECKED'")
+                db.execSQL("ALTER TABLE models ADD COLUMN last_modified INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE models ADD COLUMN last_checked_at INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -83,7 +93,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pocketnode.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

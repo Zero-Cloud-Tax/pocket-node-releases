@@ -15,7 +15,9 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Recommend
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +28,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.pocketnode.app.data.ModelDownloadSpec
+import com.pocketnode.app.data.OPERATOR_SPEC
+import com.pocketnode.app.data.StorageUtils
+import com.pocketnode.app.data.VerificationStatus
 import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.data.model.ModelRole
 import com.pocketnode.app.data.model.RECOMMENDED_MODELS
@@ -47,17 +53,29 @@ fun ModelsScreen(
     val context = LocalContext.current
     val models by viewModel.models.collectAsState()
     val downloadStates by viewModel.downloadStates.collectAsState()
+    val operatorDownloadState by viewModel.operatorDownloadState.collectAsState()
+    val storageStats by viewModel.storageStats.collectAsState()
+    val importError by viewModel.importError.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     var showUrlDialog by remember { mutableStateOf(false) }
     var downloadUrl by remember { mutableStateOf("") }
+    var pendingDelete by remember { mutableStateOf<LocalModel?>(null) }
 
     val chatModels = models.filter { it.role != ModelRole.DRAFT.name }
     val draftModels = models.filter { it.role == ModelRole.DRAFT.name }
 
     LaunchedEffect(Unit) {
         viewModel.importCompletedDownloads(context)
+        viewModel.refreshStorageStats()
+    }
+
+    LaunchedEffect(importError) {
+        importError?.let { msg ->
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Long)
+            viewModel.clearImportError()
+        }
     }
 
     val launcher = rememberLauncherForActivityResult(
@@ -129,6 +147,16 @@ fun ModelsScreen(
                 }
 
                 FloatingActionButton(
+                    onClick = { viewModel.rescanModels() },
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Rescan")
+                }
+
+                FloatingActionButton(
                     onClick = onNavigateToSettings,
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -138,6 +166,10 @@ fun ModelsScreen(
                     Icon(Icons.Default.Settings, contentDescription = "Settings")
                 }
             }
+        }
+
+        storageStats?.let { stats ->
+            StorageHeaderCard(stats, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
 
         if (!isPro && models.isNotEmpty()) {
@@ -172,6 +204,22 @@ fun ModelsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item {
+                OperatorDownloadCard(
+                    spec = OPERATOR_SPEC,
+                    downloadState = operatorDownloadState,
+                    onDownload = { spec -> viewModel.downloadOperatorModel(spec) },
+                    onCancel = { viewModel.cancelOperatorDownload() },
+                    onRetry = { spec ->
+                        viewModel.resetOperatorDownloadState()
+                        viewModel.downloadOperatorModel(spec)
+                    },
+                    onUseExisting = { spec -> viewModel.useExistingOperatorModel(spec) },
+                    onReplace = { spec -> viewModel.replaceOperatorModel(spec) },
+                    onDismissExists = { viewModel.resetOperatorDownloadState() }
+                )
+            }
+
             item { SectionHeader("Recommended", Icons.Default.Recommend) }
 
             items(RECOMMENDED_MODELS) { remoteModel ->
@@ -205,8 +253,9 @@ fun ModelsScreen(
                     InstalledModelCard(
                         model = model,
                         onSelect = { onModelSelected(model) },
-                        onDelete = { viewModel.deleteModel(model) },
-                        tpsLabel = tpsLabel
+                        onDelete = { pendingDelete = model },
+                        tpsLabel = tpsLabel,
+                        onToggleRole = { viewModel.setModelRole(model, ModelRole.DRAFT.name) }
                     )
                 }
             }
@@ -225,7 +274,8 @@ fun ModelsScreen(
                                 )
                             }
                         },
-                        onDelete = { viewModel.deleteModel(model) }
+                        onDelete = { pendingDelete = model },
+                        onToggleRole = { viewModel.setModelRole(model, ModelRole.MAIN.name) }
                     )
                 }
             }
@@ -236,6 +286,33 @@ fun ModelsScreen(
         }
     } // Column
     } // Scaffold
+
+    pendingDelete?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete this model?") },
+            text = {
+                Text(
+                    "This removes the GGUF file from this device. " +
+                    "It does not affect any cloud account.\n\n${model.name}.gguf",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteModel(model)
+                        pendingDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     if (showUrlDialog) {
         AlertDialog(
@@ -362,6 +439,7 @@ fun RemoteModelCard(
                                 tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(24.dp))
                         }
                     }
+                    else -> {}
                 }
             }
         }
@@ -375,7 +453,8 @@ fun InstalledModelCard(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
     isDraft: Boolean = false,
-    tpsLabel: String? = null
+    tpsLabel: String? = null,
+    onToggleRole: (() -> Unit)? = null
 ) {
     Card(
         onClick = onSelect,
@@ -402,10 +481,12 @@ fun InstalledModelCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(model.path.split("/").last(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-
+                    val sizeLabel = if (model.sizeBytes > 0) StorageUtils.formatBytes(model.sizeBytes) else null
+                    if (sizeLabel != null) {
+                        Text(sizeLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (isDraft) {
                         Badge(containerColor = Color(0xFFFF6D00)) {
                             Text("DRAFT", color = Color.White, fontSize = 10.sp)
@@ -418,6 +499,7 @@ fun InstalledModelCard(
                                 fontSize = 10.sp)
                         }
                     }
+                    VerificationBadge(model.verificationStatus)
                     if (tpsLabel != null) {
                         Badge(containerColor = MaterialTheme.colorScheme.tertiaryContainer) {
                             Text(tpsLabel,
@@ -425,6 +507,15 @@ fun InstalledModelCard(
                                 fontSize = 10.sp)
                         }
                     }
+                }
+            }
+            if (onToggleRole != null) {
+                TextButton(onClick = onToggleRole) {
+                    Text(
+                        if (isDraft) "→ Main" else "→ Draft",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
             IconButton(onClick = onDelete) {
@@ -446,5 +537,237 @@ fun EmptyModelsPlaceholder() {
         Text("Download a recommendation or import a .gguf file",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+    }
+}
+
+@Composable
+fun StorageHeaderCard(
+    stats: com.pocketnode.app.data.StorageStats,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Icon(
+                Icons.Default.Storage,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "${stats.modelCount} model${if (stats.modelCount != 1) "s" else ""} · " +
+                    "${StorageUtils.formatBytes(stats.usedBytes)} used · " +
+                    "${StorageUtils.formatBytes(stats.freeBytes)} free",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stats.modelsDirPath,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun OperatorDownloadCard(
+    spec: ModelDownloadSpec?,
+    downloadState: DownloadState,
+    onDownload: (ModelDownloadSpec) -> Unit,
+    onCancel: () -> Unit,
+    onRetry: (ModelDownloadSpec) -> Unit,
+    onUseExisting: (ModelDownloadSpec) -> Unit,
+    onReplace: (ModelDownloadSpec) -> Unit,
+    onDismissExists: () -> Unit
+) {
+    var showExistsDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(downloadState) {
+        showExistsDialog = downloadState is DownloadState.FileExists
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        spec?.displayName ?: "PocketNode Operator",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (spec != null) spec.filename else "Source not configured",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    spec?.sizeBytes?.let { bytes ->
+                        Spacer(Modifier.height(4.dp))
+                        Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                            Text(StorageUtils.formatBytes(bytes),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 10.sp)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        spec == null -> Icon(
+                            Icons.Default.Lock,
+                            contentDescription = "Not configured",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        downloadState is DownloadState.Idle ||
+                        downloadState is DownloadState.Cancelled -> IconButton(
+                            onClick = { onDownload(spec) },
+                            modifier = Modifier.size(40.dp),
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "Download",
+                                modifier = Modifier.size(20.dp))
+                        }
+                        downloadState is DownloadState.Queued ||
+                        downloadState is DownloadState.Downloading ||
+                        downloadState is DownloadState.Verifying -> CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            strokeWidth = 3.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        downloadState is DownloadState.Complete -> Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Ready",
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(32.dp)
+                        )
+                        downloadState is DownloadState.Error -> IconButton(
+                            onClick = { onRetry(spec) },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(Icons.Default.Error,
+                                contentDescription = "Retry",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(24.dp))
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            // Status / progress row
+            when (val state = downloadState) {
+                is DownloadState.Queued -> {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Starting…", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is DownloadState.Downloading -> {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { state.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (state.totalBytes > 0)
+                                "${StorageUtils.formatBytes(state.bytesDownloaded)} / ${StorageUtils.formatBytes(state.totalBytes)}"
+                            else
+                                "${StorageUtils.formatBytes(state.bytesDownloaded)} downloaded",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = onCancel,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                            Text("Cancel", color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                is DownloadState.Verifying -> {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Verifying…", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is DownloadState.Complete -> {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Ready — model is installed", style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF4CAF50))
+                }
+                is DownloadState.Error -> {
+                    Spacer(Modifier.height(4.dp))
+                    Text(state.msg, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
+                is DownloadState.Cancelled -> {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Download cancelled", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    if (showExistsDialog && spec != null) {
+        AlertDialog(
+            onDismissRequest = { showExistsDialog = false; onDismissExists() },
+            title = { Text("File Already Exists") },
+            text = { Text("${spec.filename} is already in your models folder.") },
+            confirmButton = {
+                TextButton(onClick = { showExistsDialog = false; onReplace(spec) }) {
+                    Text("Replace", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showExistsDialog = false; onDismissExists() }) {
+                        Text("Cancel")
+                    }
+                    TextButton(onClick = { showExistsDialog = false; onUseExisting(spec) }) {
+                        Text("Use Existing")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun VerificationBadge(status: String) {
+    val (label, color) = when (status) {
+        VerificationStatus.VERIFIED     -> "Verified"     to Color(0xFF4CAF50)
+        VerificationStatus.UNKNOWN_HASH -> "Unknown Hash" to Color(0xFFFF9800)
+        VerificationStatus.HASHING      -> "Hashing…"    to MaterialTheme.colorScheme.primary
+        VerificationStatus.FAILED       -> "Failed"       to MaterialTheme.colorScheme.error
+        else                            -> return
+    }
+    Badge(containerColor = color.copy(alpha = 0.15f)) {
+        Text(label, color = color, fontSize = 9.sp)
     }
 }

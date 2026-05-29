@@ -51,6 +51,8 @@ android {
         val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
         buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
         buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
+        val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL") ?: ""
+        buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
     }
 
     buildTypes {

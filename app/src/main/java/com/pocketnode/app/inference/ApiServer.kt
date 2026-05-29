@@ -175,7 +175,8 @@ object ApiServer {
                         }
                         override fun onStats(
                             tps: Float, ttftMs: Long, draftAcceptRate: Float,
-                            totalTokens: Int, promptEvalTps: Float, backendName: String
+                            totalTokens: Int, promptEvalTps: Float, backendName: String,
+                            nDrafted: Int, nAccepted: Int
                         ) { /* Edge API stats not surfaced over HTTP */ }
                     }
                     try {

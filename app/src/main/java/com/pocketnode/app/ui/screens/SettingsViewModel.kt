@@ -31,6 +31,7 @@ private object Keys {
     val BATCH_SIZE              = intPreferencesKey("batch_size")
     val UBATCH_SIZE             = intPreferencesKey("ubatch_size")
     val BENCHMARK_MODE          = booleanPreferencesKey("benchmark_mode")
+    val FIRST_RUN_COMPLETE      = booleanPreferencesKey("first_run_complete")
 }
 
 class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewModel() {
@@ -95,6 +96,12 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val benchmarkMode: StateFlow<Boolean> = _prefs.map { it[Keys.BENCHMARK_MODE] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    // Null = DataStore not yet loaded; false = first run needed; true = complete.
+    // Must use dataStore.data directly (not _prefs) so null only means "loading", never "key absent".
+    val firstRunComplete: StateFlow<Boolean?> = dataStore.data
+        .map { it[Keys.FIRST_RUN_COMPLETE] ?: false }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     val selectedTemplate: StateFlow<PromptTemplate> = templateName.map { name ->
         when (name) {
             "Llama3" -> PromptTemplate.Llama3
@@ -120,6 +127,7 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     fun setBatchSize(v: Int) = save { it[Keys.BATCH_SIZE] = v.coerceIn(128, 1024) }
     fun setUbatchSize(v: Int) = save { it[Keys.UBATCH_SIZE] = v.coerceIn(32, 256) }
     fun setBenchmarkMode(v: Boolean) = save { it[Keys.BENCHMARK_MODE] = v }
+    fun setFirstRunComplete(v: Boolean) = save { it[Keys.FIRST_RUN_COMPLETE] = v }
 
     private fun save(block: (MutablePreferences) -> Unit) {
         viewModelScope.launch { dataStore.edit(block) }

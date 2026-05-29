@@ -1,6 +1,7 @@
 package com.pocketnode.app.ui.components
 
 import android.widget.TextView
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -141,12 +143,35 @@ fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean = true) {
                 }
             }
         }
-        Text(
-            text = timeLabel,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.padding(start = if (!isUser) 36.dp else 0.dp, top = 3.dp, bottom = 2.dp)
-        )
+        Row(
+            modifier = Modifier.padding(
+                start = if (!isUser) 36.dp else 0.dp,
+                top = 3.dp,
+                bottom = 2.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = timeLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            if (!isUser && parsed.text.isNotBlank()) {
+                val ctx = LocalContext.current
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy",
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable {
+                            clipboardManager.setText(AnnotatedString(parsed.text))
+                            Toast.makeText(ctx, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                )
+            }
+        }
     }
 }
 

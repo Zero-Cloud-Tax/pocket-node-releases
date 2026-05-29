@@ -29,6 +29,14 @@ val RECOMMENDED_MODELS = listOf(
         "1.0 GB"
     ),
     RemoteModel(
+        "Llama 3.2 1B",
+        "Extremely fast Draft model for Llama 3.2 Main models.",
+        "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+        "770 MB",
+        defaultRole = ModelRole.DRAFT,
+        family = "llama3.2"
+    ),
+    RemoteModel(
         "LLaVA 1.5 7B (Vision)",
         "Vision model. Understands images when you attach them.",
         "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf",

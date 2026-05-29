@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,8 +30,21 @@ data class InferenceStats(
     val draftAcceptRate: Float,
     val totalTokens: Int,
     val promptEvalTps: Float,
-    val backendName: String
+    val backendName: String,
+    val templateName: String = "",
+    val reqGpuLayers: Int = 0,
+    val threads: Int = 0,
+    val nDrafted: Int = 0,
+    val nAccepted: Int = 0
 )
+
+data class BenchmarkEntry(val draftCount: Int, val tps: Float, val acceptRate: Float, val nDrafted: Int, val nAccepted: Int)
+
+sealed class BenchmarkState {
+    object Idle : BenchmarkState()
+    object Running : BenchmarkState()
+    data class Done(val entries: List<BenchmarkEntry>, val recommendation: String, val bestDraftCount: Int) : BenchmarkState()
+}
 
 class ChatViewModel(
     private val inference: LlamaInference,
@@ -77,7 +91,88 @@ class ChatViewModel(
     val modelName = mutableStateOf<String?>(null)
     val modelError = mutableStateOf<String?>(null)
     val backendName = mutableStateOf("CPU")
+
+    val mainModelMetadata = mutableStateOf<ModelMetadata?>(null)
+    val draftModelMetadata = mutableStateOf<ModelMetadata?>(null)
+
+    val benchmarkState = mutableStateOf<BenchmarkState>(BenchmarkState.Idle)
+
+    // Last-used generation params — updated by sendMessage, consumed by runSpeculativeBenchmark
+    private var lastTemplate: com.pocketnode.app.inference.PromptTemplate? = null
+    private var lastTemp: Float = 0.7f
+    private var lastBatchSize: Int = 512
+    private var lastUbatchSize: Int = 512
+
+    val draftCompatibilityStatus = derivedStateOf {
+        val main = mainModelMetadata.value
+        val draft = draftModelMetadata.value
+        if (main == null || draft == null) return@derivedStateOf CompatibilityStatus.UNKNOWN
+        // Vocab size is the correct compatibility signal — architecture names differ across
+        // families (e.g. "smollm3" vs "llama") even when they share the same 128k vocabulary.
+        if (main.vocabSize == draft.vocabSize) CompatibilityStatus.GOOD else CompatibilityStatus.BAD
+    }
+    
     val lastInferenceStats = mutableStateOf<InferenceStats?>(null)
+
+    fun runSpeculativeBenchmark() {
+        if (contextPtr == 0L || draftContextPtr == 0L) return
+        if (isGenerating.value || benchmarkState.value is BenchmarkState.Running) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            benchmarkState.value = BenchmarkState.Running
+
+            val template = lastTemplate ?: PromptTemplate.ChatML
+            val temp = lastTemp
+            val batchSize = lastBatchSize
+            val ubatchSize = lastUbatchSize
+            val benchPrompt = template.format("", emptyList(), "What is 2+2? Answer in one word.")
+            val entries = mutableListOf<BenchmarkEntry>()
+
+            nativeSessionMutex.withLock {
+                // CPU-only baseline (no draft ctx)
+                var cpuTps = 0f
+                val cpuCallback = object : LlamaCallback {
+                    override fun onToken(token: String) {}
+                    override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int) {
+                        cpuTps = tps
+                    }
+                }
+                inference.nativeGenerate(contextPtr, benchPrompt, 0L, 50, temp, 0.9f, 40, 1.1f, 0L, 0, batchSize, ubatchSize, cpuCallback)
+
+                // Draft counts 1, 2, 3
+                for (n in 1..3) {
+                    var entryTps = 0f; var entryAccept = 0f; var entryDrafted = 0; var entryAccepted = 0
+                    val cb = object : LlamaCallback {
+                        override fun onToken(token: String) {}
+                        override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int) {
+                            entryTps = tps; entryAccept = draftAcceptRate; entryDrafted = nDrafted; entryAccepted = nAccepted
+                        }
+                    }
+                    inference.nativeGenerate(contextPtr, benchPrompt, 0L, 50, temp, 0.9f, 40, 1.1f, draftContextPtr, n, batchSize, ubatchSize, cb)
+                    entries += BenchmarkEntry(n, entryTps, entryAccept, entryDrafted, entryAccepted)
+                }
+
+                val bestSpec = entries.maxByOrNull { it.tps }
+                val recommendation: String
+                val bestDraftCount: Int
+                if (bestSpec != null && bestSpec.tps > cpuTps) {
+                    recommendation = "Draft ${"Count ${bestSpec.draftCount}"} wins: ${"%.1f".format(bestSpec.tps)} TPS vs CPU ${"%.1f".format(cpuTps)} TPS"
+                    bestDraftCount = bestSpec.draftCount
+                } else {
+                    recommendation = "CPU-only wins: ${"%.1f".format(cpuTps)} TPS (spec adds overhead)"
+                    bestDraftCount = 0
+                }
+
+                // Include CPU baseline as a display entry (draftCount=0)
+                val allEntries = listOf(BenchmarkEntry(0, cpuTps, 0f, 0, 0)) + entries
+                benchmarkState.value = BenchmarkState.Done(allEntries, recommendation, bestDraftCount)
+            }
+        }
+    }
+
+    fun dismissBenchmark() {
+        benchmarkState.value = BenchmarkState.Idle
+    }
 
     init {
         bindConversation(defaultConversationId)
@@ -119,6 +214,11 @@ class ChatViewModel(
             loadedGpuLayers == nGpuLayers &&
             contextPtr != 0L
         ) return
+
+        if (!modelPath.startsWith("content://") && !File(modelPath).exists()) {
+            modelError.value = "Model file not found. The configured model is no longer available locally."
+            return
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             // Resolve content:// URI → /proc/self/fd/<N>, or use the path directly
@@ -212,12 +312,26 @@ class ChatViewModel(
                     loadedContextSize = contextSize
                     loadedThreadCount = threadCount
                     loadedGpuLayers = nGpuLayers
+                    
+                    val metaArray = inference.nativeGetModelMetadata(contextPtr)
+                    if (metaArray != null && metaArray.size >= 5) {
+                        mainModelMetadata.value = ModelMetadata(
+                            architecture = metaArray[0],
+                            name = metaArray[1],
+                            tokenizerModel = metaArray[2],
+                            vocabSize = metaArray[3].toIntOrNull() ?: 0,
+                            chatTemplate = metaArray[4]
+                        )
+                    } else {
+                        mainModelMetadata.value = null
+                    }
 
                     app.activeSession = InferenceSession(contextPtr, displayName)
                 }
 
                 withContext(Dispatchers.Main) {
                     isModelReady.value = true
+                    backendName.value = if (nGpuLayers > 0) "OpenCL" else "CPU"
                 }
             } catch (e: OutOfMemoryError) {
                 cleanupFailedLoad(nextModelPtr, nextContextPtr, newFd)
@@ -300,6 +414,19 @@ class ChatViewModel(
                     draftContextPtr = ctxPtr
                     loadedDraftModelPath = draftModelPath
                     Log.i("PocketNode", "Draft model loaded: $draftModelPath (ctx=$draftCtxSize)")
+                    
+                    val metaArray = inference.nativeGetModelMetadata(draftContextPtr)
+                    if (metaArray != null && metaArray.size >= 5) {
+                        draftModelMetadata.value = ModelMetadata(
+                            architecture = metaArray[0],
+                            name = metaArray[1],
+                            tokenizerModel = metaArray[2],
+                            vocabSize = metaArray[3].toIntOrNull() ?: 0,
+                            chatTemplate = metaArray[4]
+                        )
+                    } else {
+                        draftModelMetadata.value = null
+                    }
                 }
             } catch (e: Throwable) {
                 withContext(Dispatchers.Main) {
@@ -321,6 +448,7 @@ class ChatViewModel(
                     draftModelPtr = 0L
                 }
                 loadedDraftModelPath = null
+                draftModelMetadata.value = null
             }
         }
     }
@@ -363,6 +491,11 @@ class ChatViewModel(
     ) {
         val trimmedText = text.trim()
         if (trimmedText.isBlank() || contextPtr == 0L || isGenerating.value) return
+
+        lastTemplate = template
+        lastTemp = temp
+        lastBatchSize = batchSize
+        lastUbatchSize = ubatchSize
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -432,13 +565,17 @@ class ChatViewModel(
                         draftAcceptRate: Float,
                         totalTokens: Int,
                         promptEvalTps: Float,
-                        backendName: String
+                        backendName: String,
+                        nDrafted: Int,
+                        nAccepted: Int
                     ) {
-                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, backendName)
+                        val actualBackend = if (loadedGpuLayers > 0) "OpenCL" else "CPU"
+                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted)
                         if (benchmarkMode) {
                             Log.d("PocketNode-Bench",
-                                "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s"
-                                    .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, backendName))
+                                "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s template=%s reqGpuLayers=%d threads=%d"
+                                    .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount))
+                            Log.d("PocketNode-Bench", "Full prompt sent to model:\n$fullPrompt")
                         }
                         viewModelScope.launch(Dispatchers.Main) {
                             lastInferenceStats.value = stats

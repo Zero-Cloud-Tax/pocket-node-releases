@@ -7,13 +7,21 @@ import android.os.Environment
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pocketnode.app.MainApplication
+import com.pocketnode.app.data.HashUtils
 import com.pocketnode.app.data.ModelManager
+import com.pocketnode.app.data.StorageStats
+import com.pocketnode.app.data.StorageUtils
+import com.pocketnode.app.data.VerificationStatus
 import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.data.model.ModelRole
 import com.pocketnode.app.data.model.RECOMMENDED_MODELS
 import com.pocketnode.app.data.model.RemoteModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,17 +31,35 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.UnknownHostException
 import java.util.UUID
+import com.pocketnode.app.data.ModelDownloadSpec
 
 sealed class DownloadState {
     object Idle : DownloadState()
-    data class Downloading(val progress: Float) : DownloadState()
+    object Queued : DownloadState()
+    // bytesDownloaded/totalBytes default to 0 so existing RemoteModelCard usage is unaffected
+    data class Downloading(
+        val progress: Float,
+        val bytesDownloaded: Long = 0L,
+        val totalBytes: Long = 0L
+    ) : DownloadState()
     object Importing : DownloadState()
-    object Done : DownloadState()
+    object Verifying : DownloadState()
+    object FileExists : DownloadState()  // final file already on disk — show Use Existing / Replace dialog
+    data class Complete(val absolutePath: String) : DownloadState()
+    object Done : DownloadState()        // kept for RECOMMENDED_MODELS DownloadManager path
     data class Error(val msg: String) : DownloadState()
+    object Cancelled : DownloadState()
 }
 
-class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
+class ModelsViewModel(
+    private val modelManager: ModelManager,
+    private val app: MainApplication
+) : ViewModel() {
 
     val models: StateFlow<List<LocalModel>> = modelManager.getModels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -41,7 +67,171 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
     private val _downloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
     val downloadStates: StateFlow<Map<String, DownloadState>> = _downloadStates.asStateFlow()
 
+    private val _storageStats = MutableStateFlow<StorageStats?>(null)
+    val storageStats: StateFlow<StorageStats?> = _storageStats.asStateFlow()
+
+    private val _importError = MutableStateFlow<String?>(null)
+    val importError: StateFlow<String?> = _importError.asStateFlow()
+
     private val activeDownloadIds = mutableMapOf<Long, String>() // downloadId -> modelName
+
+    private val _operatorDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val operatorDownloadState: StateFlow<DownloadState> = _operatorDownloadState.asStateFlow()
+    private var operatorDownloadJob: Job? = null
+
+    fun clearImportError() { _importError.value = null }
+
+    fun refreshStorageStats() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _storageStats.value = StorageUtils.compute(app)
+        }
+    }
+
+    // --- Operator streaming downloader ---
+
+    fun downloadOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
+        if (operatorDownloadJob?.isActive == true) return
+        val modelDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+        if (File(modelDir, spec.filename).exists()) {
+            _operatorDownloadState.value = DownloadState.FileExists
+            return
+        }
+        startOperatorDownload(spec, onComplete)
+    }
+
+    fun useExistingOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _operatorDownloadState.value = DownloadState.Verifying
+            val finalFile = File(File(app.getExternalFilesDir(null), "models"), spec.filename)
+            if (!finalFile.exists()) { _operatorDownloadState.value = DownloadState.Idle; return@launch }
+            val existing = models.value.firstOrNull { it.path == finalFile.absolutePath }
+            val model = existing ?: LocalModel(
+                id = UUID.randomUUID().toString(),
+                name = finalFile.nameWithoutExtension,
+                path = finalFile.absolutePath,
+                contextLength = 4096,
+                sizeBytes = finalFile.length(),
+                lastModified = finalFile.lastModified(),
+                verificationStatus = VerificationStatus.NOT_CHECKED
+            ).also { modelManager.addModel(it) }
+            hashModelIfNeeded(model)
+            _storageStats.value = StorageUtils.compute(app)
+            _operatorDownloadState.value = DownloadState.Complete(finalFile.absolutePath)
+            onComplete?.invoke()
+        }
+    }
+
+    fun replaceOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
+        operatorDownloadJob?.cancel()
+        viewModelScope.launch(Dispatchers.IO) {
+            val finalFile = File(File(app.getExternalFilesDir(null), "models"), spec.filename)
+            if (finalFile.exists()) finalFile.delete()
+            models.value.firstOrNull { it.path == finalFile.absolutePath }
+                ?.let { modelManager.deleteModel(it) }
+            startOperatorDownload(spec, onComplete)
+        }
+    }
+
+    fun cancelOperatorDownload() {
+        operatorDownloadJob?.cancel()
+        // State is set to Cancelled inside the CancellationException handler in startOperatorDownload
+    }
+
+    fun resetOperatorDownloadState() {
+        _operatorDownloadState.value = DownloadState.Idle
+    }
+
+    private fun startOperatorDownload(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
+        operatorDownloadJob = viewModelScope.launch(Dispatchers.IO) {
+            val modelDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+            val finalFile = File(modelDir, spec.filename)
+            val partFile = File(modelDir, "${spec.filename}.part")
+
+            // Storage preflight — if size known, require size + 512 MB buffer
+            if (spec.sizeBytes != null) {
+                val required = spec.sizeBytes + 512L * 1024 * 1024
+                if (modelDir.freeSpace < required) {
+                    _operatorDownloadState.value = DownloadState.Error(
+                        "Not enough storage. Need at least ${StorageUtils.formatBytes(required)} free."
+                    )
+                    return@launch
+                }
+            }
+
+            _operatorDownloadState.value = DownloadState.Queued
+            if (partFile.exists()) partFile.delete()
+
+            try {
+                val conn = URL(spec.url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 15_000
+                conn.readTimeout = 30_000
+                conn.setRequestProperty("User-Agent", "PocketNode/1.0 Android")
+                conn.connect()
+
+                if (conn.responseCode !in 200..299) {
+                    _operatorDownloadState.value =
+                        DownloadState.Error("Download failed (HTTP ${conn.responseCode})")
+                    return@launch
+                }
+
+                val totalBytes = conn.contentLengthLong
+                var bytesDownloaded = 0L
+                val buffer = ByteArray(64 * 1024)
+
+                conn.inputStream.use { input ->
+                    partFile.outputStream().use { output ->
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            ensureActive()
+                            output.write(buffer, 0, read)
+                            bytesDownloaded += read
+                            val pct = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes else 0f
+                            _operatorDownloadState.value =
+                                DownloadState.Downloading(pct, bytesDownloaded, totalBytes)
+                        }
+                    }
+                }
+
+                if (!partFile.renameTo(finalFile)) {
+                    partFile.delete()
+                    _operatorDownloadState.value = DownloadState.Error("File write failed")
+                    return@launch
+                }
+
+                _operatorDownloadState.value = DownloadState.Verifying
+                val model = LocalModel(
+                    id = UUID.randomUUID().toString(),
+                    name = finalFile.nameWithoutExtension,
+                    path = finalFile.absolutePath,
+                    contextLength = 4096,
+                    sizeBytes = finalFile.length(),
+                    lastModified = finalFile.lastModified(),
+                    verificationStatus = VerificationStatus.NOT_CHECKED
+                )
+                modelManager.addModel(model)
+                hashModelIfNeeded(model)
+                _storageStats.value = StorageUtils.compute(app)
+                _operatorDownloadState.value = DownloadState.Complete(finalFile.absolutePath)
+                onComplete?.invoke()
+
+            } catch (e: CancellationException) {
+                partFile.delete()
+                _operatorDownloadState.value = DownloadState.Cancelled
+                throw e
+            } catch (_: UnknownHostException) {
+                partFile.delete()
+                _operatorDownloadState.value = DownloadState.Error("No internet connection")
+            } catch (_: IOException) {
+                partFile.delete()
+                _operatorDownloadState.value = DownloadState.Error("Download failed. Check your connection.")
+            } catch (e: Exception) {
+                partFile.delete()
+                _operatorDownloadState.value = DownloadState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+
+    // --- End operator streaming downloader ---
 
     fun downloadModel(context: Context, remoteModel: RemoteModel) {
         val appContext = context.applicationContext
@@ -194,11 +384,17 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
                 id = existing?.id ?: UUID.randomUUID().toString(),
                 name = modelName,
                 path = appModelFile.absolutePath,
-                contextLength = 2048,
+                contextLength = existing?.contextLength ?: 4096,
                 role = role,
-                family = family
+                family = family ?: existing?.family,
+                quantization = existing?.quantization,
+                tokenizerHash = existing?.tokenizerHash,
+                sizeBytes = appModelFile.length(),
+                lastModified = appModelFile.lastModified(),
+                verificationStatus = VerificationStatus.NOT_CHECKED
             )
         )
+        _storageStats.value = StorageUtils.compute(app)
     }
 
     private fun setDownloadState(modelName: String, state: DownloadState) {
@@ -209,35 +405,54 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         _downloadStates.update { current -> current - modelName }
     }
 
-    fun importModel(context: Context, uri: Uri) {
+    fun importModel(context: Context, uri: Uri, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             val documentName = DocumentFile.fromSingleUri(context, uri)?.name
                 ?: "model_${UUID.randomUUID()}.gguf"
-            val safeName = if (documentName.endsWith(".gguf", ignoreCase = true)) {
-                documentName
-            } else {
-                "$documentName.gguf"
+
+            if (!documentName.endsWith(".gguf", ignoreCase = true)) {
+                _importError.value = "Only GGUF files (.gguf) can be imported. Selected: \"$documentName\""
+                return@launch
             }
-            val modelName = safeName.removeSuffix(".gguf")
+
+            val modelName = documentName.removeSuffix(".gguf").removeSuffix(".GGUF")
             setDownloadState(modelName, DownloadState.Importing)
 
             try {
-                if (models.value.any { normalizedModelName(it.name) == normalizedModelName(modelName) && File(it.path).exists() }) {
-                    setDownloadState(modelName, DownloadState.Done)
-                    return@launch
-                }
-                val appModelFile = copyUriIntoModelDir(context, uri, safeName)
+                val appModelFile = copyUriIntoModelDir(context, uri, "$modelName.gguf")
+                val displayName = appModelFile.nameWithoutExtension
+                val modelId = UUID.randomUUID().toString()
+
                 modelManager.addModel(
                     LocalModel(
-                        id = UUID.randomUUID().toString(),
-                        name = modelName,
+                        id = modelId,
+                        name = displayName,
                         path = appModelFile.absolutePath,
-                        contextLength = 2048
+                        contextLength = 4096,
+                        sizeBytes = appModelFile.length(),
+                        lastModified = appModelFile.lastModified(),
+                        verificationStatus = VerificationStatus.NOT_CHECKED
                     )
                 )
-                setDownloadState(modelName, DownloadState.Done)
+                setDownloadState(displayName, DownloadState.Done)
+                _storageStats.value = StorageUtils.compute(app)
+
+                // Hash in background after import
+                val newModel = LocalModel(
+                    id = modelId,
+                    name = displayName,
+                    path = appModelFile.absolutePath,
+                    contextLength = 4096,
+                    sizeBytes = appModelFile.length(),
+                    lastModified = appModelFile.lastModified(),
+                    verificationStatus = VerificationStatus.NOT_CHECKED
+                )
+                hashModelIfNeeded(newModel)
+
+                onComplete?.invoke()
             } catch (e: Exception) {
                 setDownloadState(modelName, DownloadState.Error(e.message ?: "Import failed"))
+                _importError.value = e.message ?: "Import failed"
             }
         }
     }
@@ -286,11 +501,93 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         }
     }
 
-    fun deleteModel(model: LocalModel) {
+    fun setModelRole(model: LocalModel, role: String) {
         viewModelScope.launch {
+            modelManager.addModel(model.copy(role = role))
+        }
+    }
+
+    fun deleteModel(model: LocalModel) {
+        viewModelScope.launch(Dispatchers.IO) {
             val file = File(model.path)
             if (file.exists()) file.delete()
             modelManager.deleteModel(model)
+            _storageStats.value = StorageUtils.compute(app)
+        }
+    }
+
+    fun rescanModels() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val modelsDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+            val diskFiles = modelsDir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }
+                ?.associateBy { it.absolutePath } ?: emptyMap()
+            val dbModels = models.value
+
+            // Remove DB records for files no longer on disk
+            dbModels.filter { !File(it.path).exists() }
+                .forEach { modelManager.deleteModel(it) }
+
+            // Add DB records for new disk files
+            val dbPaths = dbModels.map { it.path }.toSet()
+            diskFiles.values.filter { it.absolutePath !in dbPaths }.forEach { file ->
+                val matched = RECOMMENDED_MODELS.firstOrNull { remote ->
+                    normalizedModelName(remote.name) == normalizedModelName(file.nameWithoutExtension)
+                }
+                modelManager.addModel(LocalModel(
+                    id = UUID.randomUUID().toString(),
+                    name = file.nameWithoutExtension,
+                    path = file.absolutePath,
+                    contextLength = 4096,
+                    sizeBytes = file.length(),
+                    lastModified = file.lastModified(),
+                    role = matched?.defaultRole?.name ?: ModelRole.MAIN.name,
+                    family = matched?.family,
+                    verificationStatus = VerificationStatus.NOT_CHECKED
+                ))
+            }
+
+            // Hash files that are new or whose content has changed
+            models.value.forEach { model -> hashModelIfNeeded(model) }
+
+            _storageStats.value = StorageUtils.compute(app)
+        }
+    }
+
+    private suspend fun hashModelIfNeeded(model: LocalModel) {
+        val file = File(model.path)
+        if (!file.exists()) return
+        if (model.verificationStatus == VerificationStatus.HASHING) return
+
+        val currentSize = file.length()
+        val currentMtime = file.lastModified()
+
+        // Skip if already hashed and file is unchanged
+        if (model.sha256 != null
+            && model.sizeBytes == currentSize
+            && model.lastModified == currentMtime
+        ) return
+
+        modelManager.addModel(model.copy(
+            verificationStatus = VerificationStatus.HASHING,
+            sizeBytes = currentSize,
+            lastModified = currentMtime
+        ))
+
+        try {
+            val hash = HashUtils.sha256(file)
+            modelManager.addModel(model.copy(
+                sha256 = hash,
+                sizeBytes = currentSize,
+                lastModified = currentMtime,
+                // No known-hash map — report UNKNOWN_HASH rather than VERIFIED
+                verificationStatus = VerificationStatus.UNKNOWN_HASH,
+                lastCheckedAt = System.currentTimeMillis()
+            ))
+        } catch (_: Exception) {
+            modelManager.addModel(model.copy(
+                verificationStatus = VerificationStatus.FAILED,
+                lastCheckedAt = System.currentTimeMillis()
+            ))
         }
     }
 
@@ -324,7 +621,7 @@ class ModelsViewModel(private val modelManager: ModelManager) : ViewModel() {
         var candidate = File(modelDir, safeBaseName)
         var index = 1
         while (candidate.exists()) {
-            candidate = File(modelDir, "${baseName}_$index.gguf")
+            candidate = File(modelDir, "$baseName ($index).gguf")
             index++
         }
         return candidate

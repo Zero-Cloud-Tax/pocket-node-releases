@@ -23,7 +23,7 @@ class ViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
             modelClass.isAssignableFrom(ModelsViewModel::class.java) ->
-                ModelsViewModel(modelManager!!) as T
+                ModelsViewModel(modelManager!!, app) as T
 
             modelClass.isAssignableFrom(ChatViewModel::class.java) ->
                 ChatViewModel(app.inference, chatRepository!!, app, defaultConversationId) as T

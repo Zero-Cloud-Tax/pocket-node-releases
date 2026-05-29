@@ -28,9 +28,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketnode.app.data.model.ChatMessage
+import com.pocketnode.app.inference.BenchmarkState
+import com.pocketnode.app.inference.CompatibilityStatus
 import com.pocketnode.app.inference.DocumentReader
 import com.pocketnode.app.inference.InferenceStats
 import com.pocketnode.app.ui.components.ChatBubble
@@ -53,9 +56,17 @@ fun ChatScreen(
     onStopGeneration: () -> Unit,
     onDismissError: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToModels: () -> Unit = {},
     onOpenConversations: () -> Unit,
     benchmarkMode: Boolean = false,
-    lastInferenceStats: InferenceStats? = null
+    lastInferenceStats: InferenceStats? = null,
+    compatibilityWarning: String? = null,
+    compatibilityStatus: CompatibilityStatus = CompatibilityStatus.UNKNOWN,
+    speculativeEnabled: Boolean = false,
+    draftCount: Int = 0,
+    benchmarkState: BenchmarkState = BenchmarkState.Idle,
+    onTune: (() -> Unit)? = null,
+    onDismissBenchmark: (() -> Unit)? = null
 ) {
     var inputText by remember { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
@@ -115,10 +126,19 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val totalItems = messages.size + (if (isGenerating) 1 else 0)
 
-    LaunchedEffect(totalItems, currentAssistantMessage) {
-        if (totalItems > 0) {
-            listState.animateScrollToItem(totalItems - 1)
+    // Only auto-scroll when the user is already near the bottom; never yank them back up.
+    val shouldAutoScroll by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= info.totalItemsCount - 2
         }
+    }
+    LaunchedEffect(totalItems) {
+        if (totalItems > 0) listState.animateScrollToItem(totalItems - 1)
+    }
+    LaunchedEffect(currentAssistantMessage) {
+        if (shouldAutoScroll && totalItems > 0) listState.scrollToItem(totalItems - 1)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -187,20 +207,31 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.errorContainer
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            modelError ?: "",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                        IconButton(onClick = onDismissError, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Dismiss",
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size(16.dp))
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                modelError ?: "",
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            IconButton(onClick = onDismissError, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.size(16.dp))
+                            }
+                        }
+                        if (modelError?.contains("not found", ignoreCase = true) == true) {
+                            TextButton(
+                                onClick = onNavigateToModels,
+                                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "Return to Models",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
@@ -232,6 +263,15 @@ fun ChatScreen(
                 contentPadding = PaddingValues(vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (messages.isEmpty() && !isGenerating) {
+                    item(key = "empty_state") {
+                        EmptyChatState(
+                            onSuggestionClick = { inputText = it },
+                            modifier = Modifier.fillParentMaxSize()
+                        )
+                    }
+                }
+
                 val displayMessages = if (isGenerating && messages.isNotEmpty() && messages.last().role == "assistant") {
                     messages.dropLast(1)
                 } else {
@@ -257,12 +297,27 @@ fun ChatScreen(
                 if (isGenerating && currentAssistantMessage.isEmpty()) {
                     item { TypingIndicator() }
                 }
-                // Benchmark stats row — shown below last AI response when not generating
+                // Benchmark stats row – shown below last AI response when not generating
                 if (!isGenerating && benchmarkMode && lastInferenceStats != null) {
                     item {
-                        StatsRow(stats = lastInferenceStats)
+                        StatsRow(
+                            stats = lastInferenceStats,
+                            compatibilityWarning = compatibilityWarning,
+                            compatibilityStatus = compatibilityStatus,
+                            speculativeEnabled = speculativeEnabled,
+                            draftCount = draftCount,
+                            onTune = onTune
+                        )
                     }
                 }
+            }
+
+            // ── Benchmark dialog ──
+            if (benchmarkState is BenchmarkState.Done) {
+                BenchmarkDialog(
+                    state = benchmarkState,
+                    onDismiss = { onDismissBenchmark?.invoke() }
+                )
             }
 
             // ── Input bar ──
@@ -401,7 +456,14 @@ fun ChatInputBar(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun StatsRow(stats: InferenceStats) {
+private fun StatsRow(
+    stats: InferenceStats,
+    compatibilityWarning: String? = null,
+    compatibilityStatus: CompatibilityStatus = CompatibilityStatus.UNKNOWN,
+    speculativeEnabled: Boolean = false,
+    draftCount: Int = 0,
+    onTune: (() -> Unit)? = null
+) {
     var expanded by remember { mutableStateOf(false) }
 
     Surface(
@@ -413,35 +475,84 @@ private fun StatsRow(stats: InferenceStats) {
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            // Summary line
+            // Row 1: TPS / TTFT / backend — no clipping risk
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 StatChip("%.1f TPS".format(stats.tps))
                 StatChip("${stats.ttftMs}ms TTFT")
-                if (stats.draftAcceptRate > 0f) {
-                    StatChip("${(stats.draftAcceptRate * 100).toInt()}% accept")
-                }
                 Text(
                     stats.backendName,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
             }
+            // Row 2: Speculative stats — only when spec is ON
+            if (speculativeEnabled) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CompatChip(compatibilityStatus)
+                    StatChip("${(stats.draftAcceptRate * 100).toInt()}% accept")
+                    StatChip("Draft $draftCount")
+                    if (onTune != null) {
+                        TextButton(
+                            onClick = onTune,
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                        ) {
+                            Text("Tune ▶", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
             // Expanded detail
             if (expanded) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Prompt: %.1f TPS  ·  Tokens: %d  ·  Backend: %s".format(
-                        stats.promptEvalTps, stats.totalTokens, stats.backendName
+                    "Prompt: %.1f TPS • Tokens: %d\n" +
+                    "Backend: %s (ReqGpuLayers: %d)\n" +
+                    "Threads: %d • Template: %s".format(
+                        stats.promptEvalTps, stats.totalTokens,
+                        stats.backendName, stats.reqGpuLayers,
+                        stats.threads, stats.templateName
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (compatibilityWarning != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = compatibilityWarning,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun CompatChip(status: CompatibilityStatus) {
+    val (label, chipColor) = when (status) {
+        CompatibilityStatus.GOOD    -> "✓ OK"  to Color(0xFF4CAF50)
+        CompatibilityStatus.BAD     -> "✗ BAD" to Color(0xFFE53935)
+        CompatibilityStatus.UNKNOWN -> "?  —"  to Color(0xFF9E9E9E)
+    }
+    Surface(
+        color = chipColor.copy(alpha = 0.15f),
+        shape = RoundedCornerShape(4.dp)
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = chipColor,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -458,5 +569,92 @@ private fun StatChip(label: String) {
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Medium
         )
+    }
+}
+
+@Composable
+private fun BenchmarkDialog(state: BenchmarkState.Done, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Speculative Benchmark", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.entries.forEach { entry ->
+                    val isHighlighted = entry.draftCount == state.bestDraftCount && entry.draftCount > 0
+                    val label = if (entry.draftCount == 0) "CPU-only" else "Draft ${entry.draftCount}"
+                    val acceptStr = if (entry.draftCount == 0) "—" else "${(entry.acceptRate * 100).toInt()}%"
+                    Surface(
+                        color = if (isHighlighted)
+                            Color(0xFF4CAF50).copy(alpha = 0.12f)
+                        else
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(label, style = MaterialTheme.typography.bodySmall, fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal)
+                            Text("%.1f TPS".format(entry.tps), style = MaterialTheme.typography.bodySmall)
+                            Text(acceptStr, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    state.recommendation,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("OK") }
+        }
+    )
+}
+
+private val suggestionPrompts = listOf(
+    "Explain local AI in one sentence.",
+    "Write a checklist for setting up a homelab.",
+    "Summarize why zero-cloud AI matters.",
+    "Draft a short product description for Pocket Node."
+)
+
+@Composable
+private fun EmptyChatState(onSuggestionClick: (String) -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            "Pocket Node is ready",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Running locally on this device with the recommended CPU profile.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(28.dp))
+        suggestionPrompts.forEach { prompt ->
+            SuggestionChip(
+                onClick = { onSuggestionClick(prompt) },
+                label = { Text(prompt, style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp)
+            )
+        }
     }
 }

@@ -22,5 +22,20 @@ data class LocalModel(
     val quantization: String? = null,       // e.g. "Q4_0", "Q4_K_M" — persisted, not regex
 
     @ColumnInfo(name = "tokenizer_hash")
-    val tokenizerHash: String? = null       // SHA256 of tokenizer.json — draft compat check
+    val tokenizerHash: String? = null,      // SHA256 of tokenizer.json — draft compat check
+
+    @ColumnInfo(name = "size_bytes")
+    val sizeBytes: Long = 0L,
+
+    @ColumnInfo(name = "sha256")
+    val sha256: String? = null,
+
+    @ColumnInfo(name = "verification_status", defaultValue = "NOT_CHECKED")
+    val verificationStatus: String = "NOT_CHECKED",
+
+    @ColumnInfo(name = "last_modified")
+    val lastModified: Long = 0L,
+
+    @ColumnInfo(name = "last_checked_at")
+    val lastCheckedAt: Long = 0L
 )

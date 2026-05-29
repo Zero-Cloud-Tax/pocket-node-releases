@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material.icons.Icons
@@ -12,11 +13,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -27,11 +32,16 @@ import com.pocketnode.app.data.ChatRepository
 import com.pocketnode.app.data.ModelManager
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.GenerationService
+import com.pocketnode.app.data.OPERATOR_SPEC
+import com.pocketnode.app.setup.FirstRunState
+import com.pocketnode.app.setup.FirstRunViewModel
 import com.pocketnode.app.ui.ViewModelFactory
 import com.pocketnode.app.ui.screens.ChatScreen
 import com.pocketnode.app.ui.screens.ConversationListScreen
 import com.pocketnode.app.ui.screens.ModelsScreen
 import com.pocketnode.app.ui.screens.ModelsViewModel
+import com.pocketnode.app.ui.screens.RecommendedProfileScreen
+import com.pocketnode.app.ui.screens.SetupRequiredScreen
 import com.pocketnode.app.ui.screens.SettingsScreen
 import com.pocketnode.app.ui.screens.SettingsViewModel
 import com.pocketnode.app.ui.screens.UpgradeScreen
@@ -40,6 +50,7 @@ import com.pocketnode.app.ui.screens.PromptLabScreen
 import com.pocketnode.app.ui.screens.AskImageScreen
 import com.pocketnode.app.ui.screens.settingsDataStore
 import com.pocketnode.app.ui.theme.PocketNodeTheme
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -100,11 +111,32 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val navController = rememberNavController()
+
                 val factory = ViewModelFactory(app, modelManager, chatRepository, capturedSettingsDataStore)
                 val chatVm: ChatViewModel = viewModel(factory = factory)
 
                 val settingsVm: SettingsViewModel = viewModel(factory = factory)
                 val edgeApiEnabled by settingsVm.edgeApiEnabled.collectAsState()
+                val firstRunComplete by settingsVm.firstRunComplete.collectAsState()
+
+                // Only redirect when DataStore has loaded and explicitly says first run is NOT complete.
+                // firstRunComplete == null means DataStore is still loading — do not redirect yet.
+                LaunchedEffect(firstRunComplete) {
+                    if (firstRunComplete == false) {
+                        navController.navigate("setup") {
+                            popUpTo("gallery") { inclusive = true }
+                        }
+                    }
+                }
+
+                val firstRunFactory = remember(settingsVm) {
+                    object : ViewModelProvider.Factory {
+                        @Suppress("UNCHECKED_CAST")
+                        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                            FirstRunViewModel(app, settingsVm) as T
+                    }
+                }
+                val firstRunVm: FirstRunViewModel = viewModel(factory = firstRunFactory)
 
                 val isPro by app.licenseManager.isProFlow.collectAsState(initial = false)
 
@@ -121,6 +153,7 @@ class MainActivity : ComponentActivity() {
 
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route ?: ""
+                val setupState by firstRunVm.state
 
                 val title = when {
                     currentRoute.startsWith("chat") -> "AI Chat"
@@ -130,9 +163,12 @@ class MainActivity : ComponentActivity() {
                     currentRoute.startsWith("conversations") -> "Conversations"
                     currentRoute == "settings" -> "Settings"
                     currentRoute == "upgrade" -> "Go Pro"
+                    currentRoute == "setup" -> "Welcome"
                     else -> "Pocket Node"
                 }
-                val showBack = currentRoute != "gallery"
+                // Show back on setup only when the user reached RecommendedProfileScreen via import
+                val showBack = currentRoute != "gallery" &&
+                    !(currentRoute == "setup" && setupState !is FirstRunState.ModelFound)
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -141,7 +177,13 @@ class MainActivity : ComponentActivity() {
                             title = { Text(title) },
                             navigationIcon = {
                                 if (showBack) {
-                                    IconButton(onClick = { navController.popBackStack() }) {
+                                    IconButton(onClick = {
+                                        if (currentRoute == "setup") {
+                                            firstRunVm.resetToMissing()
+                                        } else {
+                                            navController.popBackStack()
+                                        }
+                                    }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                                     }
                                 }
@@ -159,6 +201,75 @@ class MainActivity : ComponentActivity() {
                                 GalleryScreen(
                                     onNavigate = { route -> navController.navigate(route) }
                                 )
+                            }
+
+                            composable("setup") {
+                                // System back gesture: only meaningful when on RecommendedProfileScreen
+                                BackHandler(enabled = setupState is FirstRunState.ModelFound) {
+                                    firstRunVm.resetToMissing()
+                                }
+                                val modelsVm: ModelsViewModel = viewModel(factory = factory)
+                                val scope = rememberCoroutineScope()
+                                when (val s = setupState) {
+                                    is FirstRunState.Loading -> Box(Modifier.fillMaxSize()) {
+                                        CircularProgressIndicator(Modifier.align(Alignment.Center))
+                                    }
+                                    is FirstRunState.ModelMissing -> {
+                                        val context = LocalContext.current
+                                        val operatorDownloadState by modelsVm.operatorDownloadState.collectAsState()
+                                        SetupRequiredScreen(
+                                            onNavigateToModels = { navController.navigate("models/manage") },
+                                            onImportModel = { uri ->
+                                                modelsVm.importModel(context, uri) {
+                                                    firstRunVm.rescan()
+                                                }
+                                            },
+                                            operatorSpec = OPERATOR_SPEC,
+                                            operatorDownloadState = operatorDownloadState,
+                                            onDownloadOperator = {
+                                                OPERATOR_SPEC?.let { spec ->
+                                                    modelsVm.downloadOperatorModel(spec) {
+                                                        firstRunVm.scanEnvironment()
+                                                    }
+                                                }
+                                            },
+                                            onCancelOperatorDownload = {
+                                                modelsVm.cancelOperatorDownload()
+                                            },
+                                            onUseExistingOperator = {
+                                                OPERATOR_SPEC?.let { spec ->
+                                                    modelsVm.useExistingOperatorModel(spec) {
+                                                        firstRunVm.scanEnvironment()
+                                                    }
+                                                }
+                                            },
+                                            onReplaceOperator = {
+                                                OPERATOR_SPEC?.let { spec ->
+                                                    modelsVm.replaceOperatorModel(spec) {
+                                                        firstRunVm.scanEnvironment()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                    is FirstRunState.ModelFound -> RecommendedProfileScreen(
+                                        profile = s.profile,
+                                        onApply = {
+                                            scope.launch {
+                                                firstRunVm.applyRecommendedProfile(s.profile)
+                                                navController.navigate("chat/${Uri.encode(s.modelPath)}/1") {
+                                                    popUpTo("setup") { inclusive = true }
+                                                }
+                                            }
+                                        },
+                                        onCustomize = {
+                                            settingsVm.setFirstRunComplete(true)
+                                            navController.navigate("settings") {
+                                                popUpTo("setup") { inclusive = true }
+                                            }
+                                        }
+                                    )
+                                }
                             }
 
                             composable("models/{mode}") { backStackEntry ->
@@ -208,6 +319,17 @@ class MainActivity : ComponentActivity() {
                                 val batchSize by settingsVm.batchSize.collectAsState()
                                 val ubatchSize by settingsVm.ubatchSize.collectAsState()
                                 val benchmarkMode by settingsVm.benchmarkMode.collectAsState()
+                                
+                                val compatibilityStatus by chatVm.draftCompatibilityStatus
+                                val mainMeta by chatVm.mainModelMetadata
+                                val draftMeta by chatVm.draftModelMetadata
+                                val warningString = if (speculativeEnabled && compatibilityStatus == com.pocketnode.app.inference.CompatibilityStatus.BAD) {
+                                    "Compatibility: BAD (Expect low acceptance)\n" +
+                                    "Main: ${mainMeta?.architecture ?: "Unknown"} (${mainMeta?.vocabSize ?: 0})\n" +
+                                    "Draft: ${draftMeta?.architecture ?: "Unknown"} (${draftMeta?.vocabSize ?: 0})"
+                                } else if (speculativeEnabled && compatibilityStatus == com.pocketnode.app.inference.CompatibilityStatus.GOOD) {
+                                    "Compatibility: GOOD"
+                                } else null
 
                                 LaunchedEffect(modelPath, conversationId, contextSize, threadCount, gpuLayers) {
                                     chatVm.bindConversation(conversationId)
@@ -223,7 +345,7 @@ class MainActivity : ComponentActivity() {
                                             draftModelPath = draftModelId,
                                             mainContextSize = contextSize,
                                             threadCount = threadCount,
-                                            nGpuLayers = gpuLayers
+                                            nGpuLayers = 0 // Force draft to CPU (KleidiAI) for max batch-1 speed
                                         )
                                     } else {
                                         chatVm.unloadDraftModel()
@@ -262,9 +384,17 @@ class MainActivity : ComponentActivity() {
                                     onStopGeneration = { chatVm.stopGeneration() },
                                     onDismissError = { chatVm.dismissError() },
                                     onNavigateToSettings = { navController.navigate("settings") },
+                                    onNavigateToModels = { navController.navigate("models/manage") },
                                     onOpenConversations = { navController.navigate("conversations/${Uri.encode(modelPath ?: "")}") },
                                     benchmarkMode = benchmarkMode,
-                                    lastInferenceStats = chatVm.lastInferenceStats.value
+                                    lastInferenceStats = chatVm.lastInferenceStats.value,
+                                    compatibilityWarning = warningString,
+                                    compatibilityStatus = compatibilityStatus,
+                                    speculativeEnabled = speculativeEnabled,
+                                    draftCount = speculativeDraftCount,
+                                    benchmarkState = chatVm.benchmarkState.value,
+                                    onTune = if (benchmarkMode && speculativeEnabled) {{ chatVm.runSpeculativeBenchmark() }} else null,
+                                    onDismissBenchmark = { chatVm.dismissBenchmark() }
                                 )
                             }
 
