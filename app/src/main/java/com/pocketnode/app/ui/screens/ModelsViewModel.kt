@@ -519,6 +519,17 @@ class ModelsViewModel(
     fun rescanModels() {
         viewModelScope.launch(Dispatchers.IO) {
             val modelsDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+
+            // Delete stale .part files when no operator download is active.
+            // A .part older than 12 hours is an abandoned download — safe to remove.
+            if (operatorDownloadJob?.isActive != true) {
+                val staleCutoff = System.currentTimeMillis() - 12 * 60 * 60 * 1000L
+                modelsDir.listFiles { f -> f.name.endsWith(".part", ignoreCase = true) }
+                    ?.filter { it.lastModified() < staleCutoff }
+                    ?.forEach { it.delete() }
+            }
+
+            // Only consider proper .gguf files — .part files are never registered as models.
             val diskFiles = modelsDir.listFiles { f -> f.extension.equals("gguf", ignoreCase = true) }
                 ?.associateBy { it.absolutePath } ?: emptyMap()
             val dbModels = models.value

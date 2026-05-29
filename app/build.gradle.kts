@@ -12,17 +12,20 @@ val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) load(f.inputStream())
 }
+val hasKeystore = keystoreProps.getProperty("storeFile") != null
 
 android {
     namespace = "com.pocketnode.app"
     compileSdk = 35
 
     signingConfigs {
-        create("release") {
-            storeFile = file(keystoreProps.getProperty("storeFile"))
-            storePassword = keystoreProps.getProperty("storePassword")
-            keyAlias = keystoreProps.getProperty("keyAlias")
-            keyPassword = keystoreProps.getProperty("keyPassword")
+        if (hasKeystore) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile")!!)
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
         }
     }
 
@@ -30,8 +33,8 @@ android {
         applicationId = "com.pocketnode.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "0.1.0-rc1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -51,21 +54,29 @@ android {
         val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
         buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
         buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
-        // TEST URL: SmolLM2 135M (88 MB real GGUF) — replace with production URL before release
-        val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
-            ?: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf"
-        buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
+        // POCKETNODE_OPERATOR_URL is injected per build type — see buildTypes below.
     }
 
     buildTypes {
+        debug {
+            // Debug: SmolLM2 135M test fallback so download pipeline works without env config.
+            val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
+                ?: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf"
+            buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
+        }
         release {
+            // Release: env var → gradle property → empty string (shows "Source not configured").
+            // The SmolLM2 test URL must NEVER appear in a release build.
+            val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
+                ?: (project.findProperty("pocketnode.operator.url") as? String ?: "")
+            buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

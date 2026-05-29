@@ -215,8 +215,8 @@ class ChatViewModel(
             contextPtr != 0L
         ) return
 
-        if (!modelPath.startsWith("content://") && !File(modelPath).exists()) {
-            modelError.value = "Model file not found. The configured model is no longer available locally."
+        validateModelFile(modelPath)?.let { error ->
+            modelError.value = error
             return
         }
 
@@ -453,6 +453,20 @@ class ChatViewModel(
         }
     }
 
+    private fun validateModelFile(path: String): String? {
+        if (path.startsWith("content://")) return null // SAF path — Android validates access
+        val file = File(path)
+        if (!file.exists() || !file.isFile)
+            return "Model file not found. The configured model is no longer available locally."
+        if (file.name.endsWith(".part", ignoreCase = true))
+            return "Incomplete download detected. Delete this file and download again."
+        if (!file.name.endsWith(".gguf", ignoreCase = true))
+            return "Not a GGUF model file."
+        if (file.length() < 10_000_000L)
+            return "Model file appears corrupted or too small (< 10 MB)."
+        return null
+    }
+
     private fun closeFdIfNeeded() {
         if (rawFd >= 0) {
             inference.nativeCloseFd(rawFd)
@@ -571,7 +585,7 @@ class ChatViewModel(
                     ) {
                         val actualBackend = if (loadedGpuLayers > 0) "OpenCL" else "CPU"
                         val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted)
-                        if (benchmarkMode) {
+                        if (benchmarkMode && com.pocketnode.app.BuildConfig.DEBUG) {
                             Log.d("PocketNode-Bench",
                                 "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s template=%s reqGpuLayers=%d threads=%d"
                                     .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount))
