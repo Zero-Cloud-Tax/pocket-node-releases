@@ -33,6 +33,9 @@ keystore.properties
 *.keystore
 keystore.secrets
 
+# Cluster infra staging (gate lives on Neo, not in this repo)
+edge_gate/
+
 # Runtime logs / dumps / screenshots
 logcat*.txt
 crash_log*.txt
