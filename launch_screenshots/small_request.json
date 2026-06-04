@@ -1,0 +1,7 @@
+{
+  "model": "pocket-node-fold6",
+  "messages": [
+    {"role": "user", "content": "Reply in one sentence: what is local inference?"}
+  ],
+  "stream": false
+}

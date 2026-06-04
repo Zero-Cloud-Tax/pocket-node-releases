@@ -1,11 +1,14 @@
 package com.pocketnode.app.inference
 
 import android.content.Context
+import android.os.BatteryManager
+import android.os.Build
 import android.net.Uri
 import android.util.Log
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.derivedStateOf
+import com.pocketnode.app.data.model.KnowledgeChunk
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -35,7 +38,9 @@ data class InferenceStats(
     val reqGpuLayers: Int = 0,
     val threads: Int = 0,
     val nDrafted: Int = 0,
-    val nAccepted: Int = 0
+    val nAccepted: Int = 0,
+    val nCtx: Int = 0,
+    val nPast: Int = 0
 )
 
 data class BenchmarkEntry(val draftCount: Int, val tps: Float, val acceptRate: Float, val nDrafted: Int, val nAccepted: Int)
@@ -59,6 +64,8 @@ class ChatViewModel(
         const val PROMPT_LAB_CONVERSATION_ID = 3L
         private const val DEFAULT_CONTEXT_SIZE = 4096
         private const val VISION_PROJECTOR_FILE_NAME = "mmproj-model-f16.gguf"
+        const val MAX_ATTACHED_CHUNKS = 5
+        private const val RESPONSE_RESERVE_TOKENS = 512
     }
 
     private var modelPtr = 0L
@@ -114,6 +121,20 @@ class ChatViewModel(
     
     val lastInferenceStats = mutableStateOf<InferenceStats?>(null)
 
+    // ── Attached knowledge chunks (cleared after each send) ───────────────────
+    private val _attachedChunks = mutableStateListOf<KnowledgeChunk>()
+    val attachedChunks: List<KnowledgeChunk> get() = _attachedChunks
+
+    fun attachChunk(chunk: KnowledgeChunk) {
+        if (_attachedChunks.size < MAX_ATTACHED_CHUNKS && _attachedChunks.none { it.id == chunk.id }) {
+            _attachedChunks.add(chunk)
+        }
+    }
+
+    fun removeChunk(chunkId: Long) { _attachedChunks.removeAll { it.id == chunkId } }
+
+    fun clearAttachedChunks() { _attachedChunks.clear() }
+
     fun runSpeculativeBenchmark() {
         if (contextPtr == 0L || draftContextPtr == 0L) return
         if (isGenerating.value || benchmarkState.value is BenchmarkState.Running) return
@@ -133,7 +154,7 @@ class ChatViewModel(
                 var cpuTps = 0f
                 val cpuCallback = object : LlamaCallback {
                     override fun onToken(token: String) {}
-                    override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int) {
+                    override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int) {
                         cpuTps = tps
                     }
                 }
@@ -144,7 +165,7 @@ class ChatViewModel(
                     var entryTps = 0f; var entryAccept = 0f; var entryDrafted = 0; var entryAccepted = 0
                     val cb = object : LlamaCallback {
                         override fun onToken(token: String) {}
-                        override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int) {
+                        override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float, totalTokens: Int, promptEvalTps: Float, backendName: String, nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int) {
                             entryTps = tps; entryAccept = draftAcceptRate; entryDrafted = nDrafted; entryAccepted = nAccepted
                         }
                     }
@@ -176,7 +197,7 @@ class ChatViewModel(
 
     init {
         bindConversation(defaultConversationId)
-        backendName.value = try { inference.nativeGetBackendName() } catch (_: Throwable) { "CPU" }
+        backendName.value = try { BackendInfo.normalize(inference.nativeGetBackendName()) } catch (_: Throwable) { "CPU" }
     }
 
     fun bindConversation(conversationId: Long) {
@@ -219,6 +240,11 @@ class ChatViewModel(
             modelError.value = error
             return
         }
+
+        Log.i(
+            "PocketNode",
+            "Model load config: path=$modelPath ctx=$contextSize threads=$threadCount gpu_layers=$nGpuLayers speculative=false"
+        )
 
         viewModelScope.launch(Dispatchers.IO) {
             // Resolve content:// URI → /proc/self/fd/<N>, or use the path directly
@@ -331,7 +357,11 @@ class ChatViewModel(
 
                 withContext(Dispatchers.Main) {
                     isModelReady.value = true
-                    backendName.value = if (nGpuLayers > 0) "OpenCL" else "CPU"
+                    backendName.value = try {
+                        BackendInfo.normalize(inference.nativeGetBackendName())
+                    } catch (_: Throwable) {
+                        "CPU"
+                    }
                 }
             } catch (e: OutOfMemoryError) {
                 cleanupFailedLoad(nextModelPtr, nextContextPtr, newFd)
@@ -372,6 +402,11 @@ class ChatViewModel(
         mainTokenizerHash: String? = null,
         draftTokenizerHash: String? = null
     ) {
+        validateModelFile(draftModelPath)?.let { error ->
+            modelError.value = "Draft model error: $error"
+            return
+        }
+
         // Tokenizer/family compatibility check
         if (mainTokenizerHash != null && draftTokenizerHash != null
             && mainTokenizerHash != draftTokenizerHash) {
@@ -384,6 +419,11 @@ class ChatViewModel(
         }
 
         if (loadedDraftModelPath == draftModelPath && draftContextPtr != 0L) return
+
+        Log.i(
+            "PocketNode",
+            "Draft load config: path=$draftModelPath ctx=${minOf(mainContextSize, 2048)} threads=$threadCount gpu_layers=$nGpuLayers speculative=true"
+        )
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -453,8 +493,22 @@ class ChatViewModel(
         }
     }
 
-    private fun validateModelFile(path: String): String? {
-        if (path.startsWith("content://")) return null // SAF path — Android validates access
+    fun validateModelFile(path: String): String? {
+        if (path.startsWith("content://")) {
+            val uri = runCatching { Uri.parse(path) }.getOrNull()
+                ?: return "Model file path is invalid."
+            val document = runCatching { DocumentFile.fromSingleUri(app, uri) }.getOrNull()
+                ?: return "Model file is no longer available. Re-import it from Model Hub."
+            val displayName = document.name ?: return "Model file is missing a filename."
+            if (!displayName.endsWith(".gguf", ignoreCase = true)) {
+                return "Not a GGUF model file."
+            }
+            val length = document.length()
+            if (length in 1 until 10_000_000L) {
+                return "Model file appears corrupted or too small (< 10 MB)."
+            }
+            return null
+        }
         val file = File(path)
         if (!file.exists() || !file.isFile)
             return "Model file not found. The configured model is no longer available locally."
@@ -485,6 +539,59 @@ class ChatViewModel(
         loadedGpuLayers = 0
     }
 
+    private fun buildPocketNodeHealthSummary(): String {
+        val batteryManager = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val batteryPercent = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
+        val charging = batteryManager.isCharging
+
+        val thermalCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val powerManager = app.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            @Suppress("NewApi")
+            powerManager.currentThermalStatus
+        } else {
+            0
+        }
+
+        val thermalStatus = thermalStatusString(thermalCode)
+        val modelLoaded = app.activeSession != null
+        val eligible = modelLoaded && (batteryPercent >= 30 || charging) && thermalCode < 3
+        val backend = try {
+            BackendInfo.normalize(inference.nativeGetBackendName())
+        } catch (_: Throwable) {
+            backendName.value
+        }
+        val reason = when {
+            !modelLoaded -> "model_not_loaded"
+            batteryPercent < 30 && !charging -> "battery_below_threshold"
+            thermalCode >= 3 -> "thermal_severe"
+            else -> null
+        }
+
+        return buildString {
+            append("service_alive=").append(true)
+            append("model_loaded=").append(modelLoaded)
+            append(" backend=").append(backend)
+            append(" battery=").append(batteryPercent).append('%')
+            append(" charging=").append(charging)
+            append(" thermal=").append(thermalStatus)
+            append(" eligible_for_inference=").append(eligible)
+            if (reason != null) {
+                append(" reason_if_not_eligible=").append(reason)
+            }
+        }
+    }
+
+    private fun thermalStatusString(code: Int): String = when (code) {
+        0 -> "none"
+        1 -> "light"
+        2 -> "moderate"
+        3 -> "severe"
+        4 -> "critical"
+        5 -> "emergency"
+        6 -> "shutdown"
+        else -> "none"
+    }
+
     fun sendMessage(
         text: String,
         imageBytes: ByteArray? = null,
@@ -501,10 +608,26 @@ class ChatViewModel(
         nDraft: Int = 5,
         batchSize: Int = 512,
         ubatchSize: Int = 128,
-        benchmarkMode: Boolean = false
+        benchmarkMode: Boolean = false,
+        serviceStateSummary: String? = null
     ) {
         val trimmedText = text.trim()
         if (trimmedText.isBlank() || contextPtr == 0L || isGenerating.value) return
+
+        // Context budget guard — checked on main thread before coroutine launch.
+        val chunksForSend = _attachedChunks.toList()
+        if (chunksForSend.isNotEmpty()) {
+            val effectiveCtx = if (loadedContextSize > 0) loadedContextSize else DEFAULT_CONTEXT_SIZE
+            val knowledgeToks = chunksForSend.sumOf { it.tokenEstimate }
+            val promptToks = trimmedText.length / 4
+            val nPast = lastInferenceStats.value?.nPast ?: 0
+            if (nPast + knowledgeToks + promptToks + RESPONSE_RESERVE_TOKENS > effectiveCtx) {
+                modelError.value =
+                    "Selected knowledge exceeds available context. Remove some chunks."
+                return
+            }
+        }
+        _attachedChunks.clear()
 
         lastTemplate = template
         lastTemp = temp
@@ -533,10 +656,18 @@ class ChatViewModel(
                 }
 
                 val conversationHistory = repository.getMessagesSnapshot(conversationId)
+                val knowledgeBlock = buildKnowledgeBlock(chunksForSend)
+                val groundedSystemPrompt = PromptGrounding.buildGroundedSystemPrompt(
+                    baseSystemPrompt = systemPrompt,
+                    deviceStamp = PromptGrounding.currentDeviceStamp(),
+                    pocketNodeHealthSummary = buildPocketNodeHealthSummary(),
+                    serviceStateSummary = serviceStateSummary
+                )
                 val fullPrompt = repository.buildContextString(
                     messages = conversationHistory,
-                    systemPrompt = systemPrompt,
-                    template = template
+                    systemPrompt = groundedSystemPrompt,
+                    template = template,
+                    knowledgeContext = knowledgeBlock
                 )
 
                 // Save an empty assistant message first to get its ID
@@ -581,10 +712,12 @@ class ChatViewModel(
                         promptEvalTps: Float,
                         backendName: String,
                         nDrafted: Int,
-                        nAccepted: Int
+                        nAccepted: Int,
+                        nCtx: Int,
+                        nPast: Int
                     ) {
-                        val actualBackend = if (loadedGpuLayers > 0) "OpenCL" else "CPU"
-                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted)
+                        val actualBackend = BackendInfo.normalize(backendName)
+                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted, nCtx, nPast)
                         if (benchmarkMode && com.pocketnode.app.BuildConfig.DEBUG) {
                             Log.d("PocketNode-Bench",
                                 "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s template=%s reqGpuLayers=%d threads=%d"
@@ -592,6 +725,7 @@ class ChatViewModel(
                             Log.d("PocketNode-Bench", "Full prompt sent to model:\n$fullPrompt")
                         }
                         viewModelScope.launch(Dispatchers.Main) {
+                            this@ChatViewModel.backendName.value = actualBackend
                             lastInferenceStats.value = stats
                         }
                     }
@@ -743,6 +877,19 @@ class ChatViewModel(
                     normalizedName.contains("mmproj") ||
                     normalizedName.contains("projector")
             }
+    }
+
+    private fun buildKnowledgeBlock(chunks: List<KnowledgeChunk>): String {
+        if (chunks.isEmpty()) return ""
+        val sb = StringBuilder("<knowledge>\n")
+        chunks.forEachIndexed { i, chunk ->
+            if (i > 0) sb.append("---\n")
+            sb.append("Source: ${chunk.documentTitle}\n")
+            sb.append(chunk.text)
+            sb.append("\n")
+        }
+        sb.append("</knowledge>")
+        return sb.toString()
     }
 
     override fun onCleared() {

@@ -1,0 +1,5 @@
+PS C:\Users\Rhear\Pocket Node> tailscale status | findstr /I "moolah neo mac-studio sheens-z-fold6"
+100.69.123.127   moolah             nightcreeperleader80@  windows  -                                                                                                       
+100.66.89.35     neo-x510uar        nightcreeperleader80@  linux    active; direct 192.168.1.136:41641, tx 55572 rx 47332                                                   
+100.120.179.122  sheens-mac-studio  nightcreeperleader80@  macOS    -                                                                                                       
+100.99.70.73     sheens-z-fold6     nightcreeperleader80@  android  -                                                                                                       

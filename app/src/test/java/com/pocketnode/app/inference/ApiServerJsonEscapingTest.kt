@@ -12,7 +12,7 @@ class ApiServerJsonEscapingTest {
 
     @Test
     fun jsonEncodingEscapesControlCharacters() {
-        val input = "line1\nline2\r\t\b\f\"\\\\"
+        val input = "line1\nline2\r\t\b\u000C\"\\\\"
         val encoded = Json.encodeToString(TokenChunk(input))
         assertTrue(encoded.contains("\\n"))
         assertTrue(encoded.contains("\\r"))

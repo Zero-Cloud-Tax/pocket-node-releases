@@ -9,8 +9,23 @@ import android.content.Intent
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.datastore.preferences.core.intPreferencesKey
+import com.pocketnode.app.InferenceSession
 import com.pocketnode.app.MainActivity
 import com.pocketnode.app.MainApplication
+import com.pocketnode.app.data.AppDatabase
+import com.pocketnode.app.diagnostics.ServiceHealthLog
+import com.pocketnode.app.diagnostics.ServiceHealthLog.EventType
+import com.pocketnode.app.ui.screens.settingsDataStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class GenerationService : Service() {
 
@@ -20,6 +35,11 @@ class GenerationService : Service() {
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // Pointers owned by this service (0 if not loaded or already freed)
+    private var ownedModelPtr = 0L
+    private var ownedCtxPtr = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -48,16 +68,83 @@ class GenerationService : Service() {
             .build()
 
         startForeground(NOTIFICATION_ID, notification)
+        ServiceHealthLog.record(EventType.SERVICE_STARTED)
         ApiServer.start(app)
 
         if (wakeLock?.isHeld == false) wakeLock?.acquire()
 
+        if (app.activeSession == null) {
+            serviceScope.launch { autoLoadModel(app) }
+        }
+
         return START_STICKY
     }
 
+    private suspend fun autoLoadModel(app: MainApplication) {
+        val model = AppDatabase.getInstance(app).modelDao().getFirstMainModel() ?: return
+
+        val prefs = settingsDataStore.data.first()
+        val contextSize = prefs[intPreferencesKey("context_size")] ?: 4096
+        val threadCount = prefs[intPreferencesKey("thread_count")]
+            ?: Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+        val gpuLayers = prefs[intPreferencesKey("gpu_layers")] ?: 0
+
+        val modelPtr = app.inference.nativeLoadModel(model.path, gpuLayers)
+        if (modelPtr == 0L) return
+
+        val ctxPtr = app.inference.nativeCreateContext(modelPtr, contextSize, threadCount)
+        if (ctxPtr == 0L) {
+            app.inference.nativeFreeModel(modelPtr)
+            return
+        }
+
+        // Native calls above can't be cancelled mid-execution. If the scope was
+        // cancelled while they were blocking, free the pointers we just allocated
+        // rather than leaking them, then let the CancellationException propagate.
+        try {
+            currentCoroutineContext().ensureActive()
+        } catch (e: CancellationException) {
+            app.inference.nativeFreeContext(ctxPtr)
+            app.inference.nativeFreeModel(modelPtr)
+            throw e
+        }
+
+        ownedModelPtr = modelPtr
+        ownedCtxPtr = ctxPtr
+        app.activeSession = InferenceSession(ctxPtr, model.name)
+    }
+
     override fun onDestroy() {
+        serviceScope.cancel()
         if (wakeLock?.isHeld == true) wakeLock?.release()
-        ApiServer.stop()
+
+        // Stop the server and drain any in-flight inference BEFORE freeing the
+        // context pointer. If drain times out, skip nativeFreeContext — a bounded
+        // memory leak is safer than a use-after-free SIGSEGV.
+        val drained = ApiServer.stop()
+
+        val app = application as MainApplication
+
+        if (ownedCtxPtr != 0L) {
+            // Clear the shared session only if it still points to our context
+            // (ChatViewModel may have replaced it with its own loaded model)
+            if (app.activeSession?.contextPtr == ownedCtxPtr) {
+                app.activeSession = null
+            }
+            if (drained) {
+                app.inference.nativeFreeContext(ownedCtxPtr)
+                app.inference.nativeFreeModel(ownedModelPtr)
+            } else {
+                ServiceHealthLog.record(EventType.NATIVE_FREE_SKIPPED,
+                    "drain timed out; skipping nativeFreeContext to avoid SIGSEGV")
+            }
+            // Always zero so this block is idempotent regardless of drain outcome.
+            ownedCtxPtr = 0L
+            ownedModelPtr = 0L
+        }
+
+        ServiceHealthLog.record(EventType.SERVICE_STOPPED)
+
         super.onDestroy()
     }
 

@@ -10,7 +10,9 @@ interface LlamaCallback {
         promptEvalTps: Float,
         backendName: String,
         nDrafted: Int,            // total tokens proposed by draft model (0 if non-speculative)
-        nAccepted: Int            // total draft tokens accepted by main model
+        nAccepted: Int,           // total draft tokens accepted by main model
+        nCtx: Int,                // runtime context size (n_ctx set at context creation)
+        nPast: Int                // tokens currently occupying the KV cache
     )
 }
 

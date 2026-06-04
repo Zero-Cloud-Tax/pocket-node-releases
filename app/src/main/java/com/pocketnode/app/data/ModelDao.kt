@@ -17,4 +17,7 @@ interface ModelDao {
 
     @Query("SELECT * FROM models WHERE id = :id LIMIT 1")
     suspend fun getModelById(id: String): LocalModel?
+
+    @Query("SELECT * FROM models WHERE role = 'MAIN' ORDER BY addedAt DESC LIMIT 1")
+    suspend fun getFirstMainModel(): LocalModel?
 }

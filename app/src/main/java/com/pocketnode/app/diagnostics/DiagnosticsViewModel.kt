@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class DiagnosticsViewModel(
     private val app: MainApplication,
@@ -22,9 +25,14 @@ class DiagnosticsViewModel(
     private val _hardware = MutableStateFlow(DiagnosticMetrics())
     val hardware: StateFlow<DiagnosticMetrics> = _hardware
 
-    // Full model list — screen matches against active model name to surface metadata
     val models: StateFlow<List<LocalModel>> = modelManager.getModels()
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val serviceEvents: StateFlow<List<ServiceHealthLog.ServiceEvent>> =
+        ServiceHealthLog.events.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    fun formatEventTime(timestampMs: Long): String = timeFormat.format(Date(timestampMs))
 
     init {
         viewModelScope.launch {

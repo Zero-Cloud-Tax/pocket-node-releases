@@ -28,8 +28,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.pocketnode.app.data.AppDatabase
+import com.pocketnode.app.data.KnowledgeRepository
+import com.pocketnode.app.ui.screens.KnowledgeScreen
+import com.pocketnode.app.ui.screens.KnowledgeViewModel
 import com.pocketnode.app.data.ChatRepository
 import com.pocketnode.app.data.ModelManager
+import com.pocketnode.app.inference.ApiServer
 import com.pocketnode.app.inference.ChatViewModel
 import com.pocketnode.app.inference.GenerationService
 import com.pocketnode.app.data.OPERATOR_SPEC
@@ -53,6 +57,14 @@ import com.pocketnode.app.ui.screens.AskImageScreen
 import com.pocketnode.app.ui.screens.settingsDataStore
 import com.pocketnode.app.ui.theme.PocketNodeTheme
 import kotlinx.coroutines.launch
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -75,6 +87,7 @@ class MainActivity : ComponentActivity() {
             PocketNodeTheme(darkTheme = isDarkTheme) {
                 var showUpdateDialog by remember { mutableStateOf(false) }
                 var updateInfo by remember { mutableStateOf<com.pocketnode.app.updater.AppUpdater.UpdateInfo?>(null) }
+                var showContaminatedDialog by remember { mutableStateOf(false) }
                 val context = LocalContext.current
 
                 LaunchedEffect(Unit) {
@@ -112,6 +125,31 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                if (showContaminatedDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showContaminatedDialog = false },
+                        title = { Text("Protected Shutdown") },
+                        text = {
+                            Text(
+                                "Pocket Node entered a protected shutdown after inference did " +
+                                "not stop cleanly. To prevent a native crash, the Edge API " +
+                                "will stay disabled until the app starts in a fresh process.\n\n" +
+                                "Close the app, then reopen it to restart Pocket Node safely."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { finishAffinity() }) {
+                                Text("Close App")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showContaminatedDialog = false }) {
+                                Text("Dismiss")
+                            }
+                        }
+                    )
+                }
+
                 val navController = rememberNavController()
 
                 val factory = ViewModelFactory(app, modelManager, chatRepository, capturedSettingsDataStore)
@@ -142,9 +180,52 @@ class MainActivity : ComponentActivity() {
 
                 val isPro by app.licenseManager.isProFlow.collectAsState(initial = false)
 
+                // Launcher must be declared unconditionally — composable hook rules prohibit conditional calls.
+                // The actual launch is gated on Build.VERSION.SDK_INT inside the LaunchedEffect below.
+                val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission()
+                ) { /* best-effort; service start is attempted either way */ }
+
                 // Start/stop GenerationService when the Edge API toggle changes
                 LaunchedEffect(edgeApiEnabled, isPro) {
                     if (edgeApiEnabled && isPro) {
+
+                        // Refuse to restart inside a process that had a drain timeout.
+                        // isStopping stays true permanently after a missed drain, meaning
+                        // the process may hold leaked native allocations. Only a fresh
+                        // process (i.e. user closes and reopens the app) is safe.
+                        if (ApiServer.isContaminated) {
+                            showContaminatedDialog = true
+                            return@LaunchedEffect
+                        }
+
+                        // Request POST_NOTIFICATIONS on Android 13+ before starting the foreground service.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+
+                        // Request battery optimization exemption if not already granted.
+                        // PARTIAL_WAKE_LOCK keeps the CPU awake but does NOT prevent Doze from
+                        // blocking network. Without this exemption, TCP connections to port 11434
+                        // are suspended during Doze idle windows (~30 min of device inactivity).
+                        val pm = getSystemService(PowerManager::class.java)
+                        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                            try {
+                                startActivity(
+                                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:$packageName")
+                                    }
+                                )
+                            } catch (_: Exception) {
+                                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            }
+                        }
+
                         startForegroundService(
                             Intent(this@MainActivity, GenerationService::class.java)
                         )
@@ -167,6 +248,7 @@ class MainActivity : ComponentActivity() {
                     currentRoute == "upgrade" -> "Go Pro"
                     currentRoute == "setup" -> "Welcome"
                     currentRoute == "diagnostics" -> "Diagnostics"
+                    currentRoute == "knowledge" -> "Local Knowledge"
                     else -> "Pocket Node"
                 }
                 // Show back on setup only when the user reached RecommendedProfileScreen via import
@@ -344,12 +426,20 @@ class MainActivity : ComponentActivity() {
                                 // Load/unload draft model when speculative settings change
                                 LaunchedEffect(speculativeEnabled, draftModelId, contextSize, threadCount, gpuLayers) {
                                     if (speculativeEnabled && draftModelId.isNotBlank()) {
-                                        chatVm.loadDraftModel(
-                                            draftModelPath = draftModelId,
-                                            mainContextSize = contextSize,
-                                            threadCount = threadCount,
-                                            nGpuLayers = 0 // Force draft to CPU (KleidiAI) for max batch-1 speed
-                                        )
+                                        val draftValidationError = chatVm.validateModelFile(draftModelId)
+                                        if (draftValidationError != null) {
+                                            chatVm.modelError.value = "Draft model error: $draftValidationError"
+                                            settingsVm.setSpeculativeEnabled(false)
+                                            settingsVm.setDraftModelId("")
+                                            chatVm.unloadDraftModel()
+                                        } else {
+                                            chatVm.loadDraftModel(
+                                                draftModelPath = draftModelId,
+                                                mainContextSize = contextSize,
+                                                threadCount = threadCount,
+                                                nGpuLayers = 0 // Force draft to CPU (KleidiAI) for max batch-1 speed
+                                            )
+                                        }
                                     } else {
                                         chatVm.unloadDraftModel()
                                     }
@@ -397,7 +487,11 @@ class MainActivity : ComponentActivity() {
                                     draftCount = speculativeDraftCount,
                                     benchmarkState = chatVm.benchmarkState.value,
                                     onTune = if (benchmarkMode && speculativeEnabled) {{ chatVm.runSpeculativeBenchmark() }} else null,
-                                    onDismissBenchmark = { chatVm.dismissBenchmark() }
+                                    onDismissBenchmark = { chatVm.dismissBenchmark() },
+                                    attachedChunks = chatVm.attachedChunks,
+                                    onRemoveChunk = { id -> chatVm.removeChunk(id) },
+                                    onClearChunks = { chatVm.clearAttachedChunks() },
+                                    onNavigateToKnowledge = { navController.navigate("knowledge") }
                                 )
                             }
 
@@ -453,7 +547,8 @@ class MainActivity : ComponentActivity() {
                                     isPro = isPro,
                                     draftModels = draftModels,
                                     onNavigateToUpgrade = { navController.navigate("upgrade") },
-                                    onNavigateToDiagnostics = { navController.navigate("diagnostics") }
+                                    onNavigateToDiagnostics = { navController.navigate("diagnostics") },
+                                    onNavigateToKnowledge = { navController.navigate("knowledge") }
                                 )
                             }
 
@@ -471,6 +566,26 @@ class MainActivity : ComponentActivity() {
                                     lastInferenceStats = chatVm.lastInferenceStats.value,
                                     activeModelName = chatVm.modelName.value,
                                     backendName = chatVm.backendName.value
+                                )
+                            }
+
+                            composable("knowledge") {
+                                val knowledgeRepo = remember {
+                                    KnowledgeRepository(db, db.knowledgeDao())
+                                }
+                                val knowledgeFactory = remember(knowledgeRepo) {
+                                    object : ViewModelProvider.Factory {
+                                        @Suppress("UNCHECKED_CAST")
+                                        override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                                            KnowledgeViewModel(app, knowledgeRepo) as T
+                                    }
+                                }
+                                val knowledgeVm: KnowledgeViewModel = viewModel(factory = knowledgeFactory)
+                                KnowledgeScreen(
+                                    vm = knowledgeVm,
+                                    onAttachChunk = { chunk -> chatVm.attachChunk(chunk) },
+                                    onNavigateBack = { navController.popBackStack() },
+                                    onNavigateToChat = { navController.popBackStack() }
                                 )
                             }
 

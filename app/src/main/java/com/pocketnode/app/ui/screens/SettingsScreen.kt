@@ -34,7 +34,8 @@ fun SettingsScreen(
     isPro: Boolean,
     draftModels: List<LocalModel> = emptyList(),
     onNavigateToUpgrade: () -> Unit,
-    onNavigateToDiagnostics: () -> Unit = {}
+    onNavigateToDiagnostics: () -> Unit = {},
+    onNavigateToKnowledge: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
@@ -249,6 +250,25 @@ fun SettingsScreen(
                     checked = benchmarkMode,
                     onCheckedChange = { settings.setBenchmarkMode(it) }
                 )
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            TextButton(
+                onClick = onNavigateToKnowledge,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Local Knowledge  β",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "Import .md / .txt files, search chunks, attach to chat",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             if (benchmarkMode || BuildConfig.DEBUG) {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

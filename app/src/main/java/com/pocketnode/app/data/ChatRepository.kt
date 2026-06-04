@@ -53,12 +53,17 @@ class ChatRepository(private val chatDao: ChatDao) {
         messages: List<ChatMessage>,
         systemPrompt: String,
         template: PromptTemplate,
-        maxHistory: Int = 10
+        maxHistory: Int = 10,
+        knowledgeContext: String = ""
     ): String {
         val recent = if (messages.size > maxHistory) messages.takeLast(maxHistory) else messages
-        // Build history pairs, excluding the last user message (it becomes the prompt)
         val historyMessages = if (recent.isNotEmpty()) recent.dropLast(1) else emptyList()
-        val currentPrompt = recent.lastOrNull()?.content ?: ""
+        val rawPrompt = recent.lastOrNull()?.content ?: ""
+        val currentPrompt = if (knowledgeContext.isNotEmpty()) {
+            "$knowledgeContext\n\n$rawPrompt"
+        } else {
+            rawPrompt
+        }
         val history = historyMessages.map { it.role to it.content }
         return template.format(systemPrompt, history, currentPrompt)
     }

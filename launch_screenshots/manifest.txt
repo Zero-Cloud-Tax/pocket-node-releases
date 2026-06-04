@@ -1,0 +1,5 @@
+screenshot_01_zfold6_vulkan_gguf_log.png — proves Z Fold 6 loaded GGUF with GPU offload and runtime backend=Vulkan,OpenCL.
+screenshot_02_tailscale_mesh.png — proves Z Fold 6 is visible on the Tailscale mesh with Neo, Moolah, and Mac Studio.
+screenshot_03_edge_gate_allow_fold6.png — proves small requests route to the Fold 6 through the Edge Gate.
+screenshot_04_edge_gate_bypass_macstudio.png — proves oversized requests bypass the Fold 6 and route to Mac Studio fallback.
+screenshot_05_litellm_aliases.png — proves LiteLLM has the Fold 6 and Mac Studio fallback aliases configured.

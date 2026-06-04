@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,7 +33,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketnode.app.data.model.ChatMessage
+import com.pocketnode.app.data.model.KnowledgeChunk
 import com.pocketnode.app.inference.BenchmarkState
+import com.pocketnode.app.inference.BackendInfo
 import com.pocketnode.app.inference.CompatibilityStatus
 import com.pocketnode.app.inference.DocumentReader
 import com.pocketnode.app.inference.InferenceStats
@@ -66,7 +69,11 @@ fun ChatScreen(
     draftCount: Int = 0,
     benchmarkState: BenchmarkState = BenchmarkState.Idle,
     onTune: (() -> Unit)? = null,
-    onDismissBenchmark: (() -> Unit)? = null
+    onDismissBenchmark: (() -> Unit)? = null,
+    attachedChunks: List<KnowledgeChunk> = emptyList(),
+    onRemoveChunk: (Long) -> Unit = {},
+    onClearChunks: () -> Unit = {},
+    onNavigateToKnowledge: (() -> Unit)? = null
 ) {
     var inputText by remember { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
@@ -170,7 +177,7 @@ fun ChatScreen(
                     if (isModelReady) {
                         Surface(
                             shape = CircleShape,
-                            color = if (backendName == "Vulkan")
+                            color = if (BackendInfo.isVulkanFamily(backendName))
                                 MaterialTheme.colorScheme.primaryContainer
                             else
                                 MaterialTheme.colorScheme.surfaceVariant,
@@ -180,7 +187,7 @@ fun ChatScreen(
                                 backendName,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (backendName == "Vulkan")
+                                color = if (BackendInfo.isVulkanFamily(backendName))
                                     MaterialTheme.colorScheme.onPrimaryContainer
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -190,6 +197,15 @@ fun ChatScreen(
                 }
 
                 Row {
+                    if (onNavigateToKnowledge != null) {
+                        IconButton(onClick = onNavigateToKnowledge) {
+                            Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Knowledge",
+                                tint = if (attachedChunks.isNotEmpty())
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                     IconButton(onClick = onOpenConversations) {
                         Icon(Icons.Default.Forum, contentDescription = "Conversations",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -317,6 +333,15 @@ fun ChatScreen(
                 BenchmarkDialog(
                     state = benchmarkState,
                     onDismiss = { onDismissBenchmark?.invoke() }
+                )
+            }
+
+            // ── Knowledge attachment bar ──
+            AnimatedVisibility(visible = attachedChunks.isNotEmpty()) {
+                KnowledgeBar(
+                    chunks = attachedChunks,
+                    onRemove = onRemoveChunk,
+                    onClearAll = onClearChunks
                 )
             }
 
@@ -616,6 +641,67 @@ private fun BenchmarkDialog(state: BenchmarkState.Done, onDismiss: () -> Unit) {
             TextButton(onClick = onDismiss) { Text("OK") }
         }
     )
+}
+
+@Composable
+private fun KnowledgeBar(
+    chunks: List<KnowledgeChunk>,
+    onRemove: (Long) -> Unit,
+    onClearAll: () -> Unit
+) {
+    val totalTokens = chunks.sumOf { it.tokenEstimate }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+        tonalElevation = 2.dp
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Knowledge attached — ~$totalTokens tokens",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                TextButton(
+                    onClick = onClearAll,
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                ) {
+                    Text("Clear all", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
+            chunks.forEach { chunk ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "• ${chunk.documentTitle}  (~${chunk.tokenEstimate} tok)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    IconButton(
+                        onClick = { onRemove(chunk.id) },
+                        modifier = Modifier.size(20.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Remove chunk",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private val suggestionPrompts = listOf(

@@ -3,10 +3,9 @@ project("pocketnode" CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 
-# Android Native Release Profiling
-# armv8.4-a+dotprod+i8mm unlocks KleidiAI INT8/FP16 kernels on Snapdragon 8 Gen 3
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
+# Baseline ARMv8-A — compatible with all arm64 devices including those without dotprod/i8mm
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -march=armv8-a")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=armv8-a")
 
 # ============================================================
 # llama.cpp — fetch and build from source via FetchContent
@@ -32,7 +31,43 @@ set(LLAMA_MMAP ON CACHE BOOL "" FORCE)
 
 # Adreno OpenCL + KleidiAI CPU — flags passed in from build.gradle.kts
 # GGML_OPENCL, GGML_OPENCL_USE_ADRENO_KERNELS, GGML_CPU_KLEIDIAI, GGML_OPENMP
-set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+if(NOT GGML_VULKAN)
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
+
+if(ANDROID AND GGML_VULKAN)
+    set(GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "${CMAKE_CURRENT_BINARY_DIR}/host-windows-toolchain.cmake" CACHE FILEPATH "" FORCE)
+    include_directories("C:/VulkanSDK/1.4.341.1/Include")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/host-windows-toolchain.cmake" [=[
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_C_FLAGS "/O2" CACHE STRING "" FORCE)
+set(CMAKE_CXX_FLAGS "/O2 /EHsc" CACHE STRING "" FORCE)
+set(CMAKE_MAKE_PROGRAM "C:/Users/Rhear/AppData/Local/Android/Sdk/cmake/3.22.1/bin/ninja.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE NEVER)
+set(CMAKE_C_COMPILER "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_CXX_COMPILER "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe" CACHE FILEPATH "" FORCE)
+set(CMAKE_C_STANDARD_INCLUDE_DIRECTORIES
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/include"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
+)
+set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES
+    "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/include"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
+    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
+)
+set(CMAKE_EXE_LINKER_FLAGS
+    "/LIBPATH:\"C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\" /LIBPATH:\"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\""
+    CACHE STRING "" FORCE
+)
+set(ENV{PATH} "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64;C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x86;C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64;$ENV{PATH}")
+]=])
+endif()
 
 # ============================================================
 # OpenCL headers for Android cross-compilation

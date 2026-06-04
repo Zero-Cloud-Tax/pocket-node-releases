@@ -1,0 +1,13 @@
+Device: sheens-z-fold6 / Z Fold 6
+PS C:\Users\Rhear\Pocket Node> adb logcat -d -s PocketNode
+06-03 17:01:10.712 13109 13389 I PocketNode:   backend[0]: Vulkan
+06-03 17:01:10.712 13109 13389 I PocketNode:   backend[1]: OpenCL
+06-03 17:01:10.712 13109 13389 I PocketNode:   backend[2]: CPU
+06-03 17:01:10.712 13109 13389 I PocketNode: Loading model: /storage/emulated/0/Android/data/com.pocketnode.app/files/models/PocketNode_Operator_Q4_0.gguf (gpu_layers=89)
+06-03 17:01:33.030 13717 13786 I PocketNode:   backend[0]: Vulkan
+06-03 17:01:33.030 13717 13786 I PocketNode:   backend[1]: OpenCL
+06-03 17:01:33.030 13717 13786 I PocketNode:   backend[2]: CPU
+06-03 17:01:33.030 13717 13786 I PocketNode: Loading model: /storage/emulated/0/Android/data/com.pocketnode.app/files/models/PocketNode_Operator_Q4_0.gguf (gpu_layers=89)
+06-03 17:01:33.764 13717 13786 I PocketNode: Model loaded successfully
+06-03 17:01:33.887 13717 13786 I PocketNode: Context created (ctx_size=4096, threads=4)
+06-03 17:02:21.192 13717 13733 I PocketNode: Generated 57 tokens in 0.50s (114.5 TPS) | backend=Vulkan,OpenCL

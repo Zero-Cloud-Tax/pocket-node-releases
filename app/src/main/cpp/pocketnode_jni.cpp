@@ -409,7 +409,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Resolve callback methods
     jclass callbackClass = env->GetObjectClass(callback);
     jmethodID onTokenMethod = env->GetMethodID(callbackClass, "onToken", "(Ljava/lang/String;)V");
-    jmethodID onStatsMethod = env->GetMethodID(callbackClass, "onStats", "(FJFIFLjava/lang/String;II)V");
+    jmethodID onStatsMethod = env->GetMethodID(callbackClass, "onStats", "(FJFIFLjava/lang/String;IIII)V");
     if (!onTokenMethod) {
         g_last_error = "Cannot find callback onToken method";
         LOGE("%s", g_last_error.c_str());
@@ -701,7 +701,9 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
                             (jfloat)prompt_tps,
                             j_backend,
                             (jint)n_drafted_total,
-                            (jint)n_accepted_total);
+                            (jint)n_accepted_total,
+                            (jint)llama_n_ctx(ctx),
+                            (jint)g_n_past[ctx]);
         env->DeleteLocalRef(j_backend);
         if (env->ExceptionCheck()) env->ExceptionClear();
     }

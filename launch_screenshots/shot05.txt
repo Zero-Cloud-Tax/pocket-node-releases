@@ -1,0 +1,10 @@
+PS C:\Users\Rhear\Pocket Node> ssh neo@100.66.89.35 "grep -nEA3 'model_name: pocket-node-fold6|model_name: mac-studio-edge-fallback' /home/neo/homelab/litellm/config.yaml"
+85:  - model_name: pocket-node-fold6
+86-    litellm_params:
+87-      model: openai/pocket-node
+88-      api_base: http://100.99.70.73:11434/v1
+--
+97:  - model_name: mac-studio-edge-fallback
+98-    litellm_params:
+99-      model: ollama_chat/llama3.1:8b
+100-      api_base: http://100.120.179.122:11434

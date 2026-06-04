@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.pocketnode.app.diagnostics.DiagnosticsViewModel
+import com.pocketnode.app.diagnostics.ServiceHealthLog
 import com.pocketnode.app.inference.InferenceStats
 
 @Composable
@@ -22,6 +23,7 @@ fun DiagnosticsScreen(
 ) {
     val hardware by vm.hardware.collectAsState()
     val models   by vm.models.collectAsState()
+    val serviceEvents by vm.serviceEvents.collectAsState()
     val settings = vm.settingsVm
 
     val threads           by settings.threadCount.collectAsState()
@@ -113,9 +115,41 @@ fun DiagnosticsScreen(
 
         // ── E. Context ─────────────────────────────────────────────────────────
         DiagCard("Context") {
-            DiagRow("Context size (setting)", "$contextSize tokens")
-            DiagRow("Context used",    "Not available yet")
-            DiagRow("Context fill %",  "Not available yet")
+            val stats = lastInferenceStats
+            if (stats != null && stats.nCtx > 0) {
+                val fillPct = stats.nPast.toFloat() / stats.nCtx * 100f
+                DiagRow("Max context", "${stats.nCtx} tokens")
+                DiagRow("Used", "${stats.nPast} tokens")
+                DiagRow("Fill", "%.1f%%".format(fillPct))
+                LinearProgressIndicator(
+                    progress = { (stats.nPast.toFloat() / stats.nCtx).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
+            } else {
+                DiagRow("Context", "No active context")
+            }
+        }
+
+        // ── F. Service Health ──────────────────────────────────────────────────
+        DiagCard("Service Health") {
+            if (serviceEvents.isEmpty()) {
+                DiagRow("Events", "None recorded this session")
+            } else {
+                serviceEvents.take(10).forEach { event ->
+                    val time = vm.formatEventTime(event.timestampMs)
+                    val label = event.type.name
+                        .lowercase()
+                        .replace('_', ' ')
+                    val isBad = event.type == ServiceHealthLog.EventType.STOP_DRAIN_TIMEOUT ||
+                        event.type == ServiceHealthLog.EventType.BOOT_START_DENIED ||
+                        event.type == ServiceHealthLog.EventType.NATIVE_FREE_SKIPPED
+                    DiagRow(
+                        label = time,
+                        value = if (event.detail.isNotEmpty()) "$label — ${event.detail}" else label,
+                        valueColor = if (isBad) Color(0xFFF44336) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(16.dp))

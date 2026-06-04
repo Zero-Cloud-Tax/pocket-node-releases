@@ -1,7 +1,14 @@
 package com.pocketnode.app.inference
 
+import android.content.Context
+import android.os.BatteryManager
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.pocketnode.app.MainApplication
+import com.pocketnode.app.diagnostics.ServiceHealthLog
+import com.pocketnode.app.diagnostics.ServiceHealthLog.EventType
 import com.pocketnode.app.ui.screens.settingsDataStore
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -21,14 +28,19 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -65,18 +77,98 @@ private data class DoneChunk(val done: Boolean = true)
 @Serializable
 private data class ErrorChunk(val error: String)
 
+@Serializable
+private data class OaiChatRequest(
+    val model: String? = null,
+    val messages: List<ChatMessageRequest>,
+    val stream: Boolean? = null,
+    val max_tokens: Int? = null,
+    val temperature: Float? = null
+)
+
+@Serializable
+private data class OaiDelta(val content: String? = null)
+
+@Serializable
+private data class OaiChoice(
+    val index: Int,
+    val delta: OaiDelta,
+    val finish_reason: String? = null
+)
+
+@Serializable
+private data class CapabilitiesResponse(
+    val node: String,
+    val role: String,
+    val service_alive: Boolean,
+    val model_loaded: Boolean,
+    val battery_percent: Int,
+    val charging: Boolean,
+    val thermal_status: String,
+    val foreground_service: Boolean,
+    val eligible_for_inference: Boolean,
+    val reason_if_not_eligible: String?,
+    val last_inference_at: String?,
+    val last_error: String?
+)
+
+@Serializable
+private data class NodeUnavailableResponse(
+    val error: String,
+    val reason: String,
+    val fallback_recommended: Boolean
+)
+
+@Serializable
+private data class OaiChunk(
+    val id: String,
+    @SerialName("object") val obj: String,
+    val created: Long,
+    val model: String,
+    val choices: List<OaiChoice>
+)
+
 object ApiServer {
+
+    // How long stop() will wait for an in-flight nativeGenerate to finish before
+    // giving up. On timeout the caller skips nativeFreeContext (bounded leak).
+    // Increase if you observe frequent STOP_DRAIN_TIMEOUT events during normal use.
+    private const val STOP_DRAIN_TIMEOUT_MS = 5_000L
 
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private val inferenceMutex = Mutex()
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+    private var serverStartTime = 0L
     private val serverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cachedApiKey = MutableStateFlow("")
+    private var keyCollectorJob: Job? = null
+
+    @Volatile private var isStarted = false
+    @Volatile private var isStopping = false
+
+    // Set to true when a stop() drain times out. Never reset — the process holds
+    // leaked native allocations and must not attempt to restart the server.
+    @Volatile private var contaminated = false
+    @Volatile private var lastInferenceAt: String? = null
+    @Volatile private var lastInferenceError: String? = null
+    @Volatile private var debugForceBlock = false
+
+    /**
+     * True when a previous stop() call timed out draining inference.
+     * The process may hold leaked native allocations; no further start
+     * attempts should be made until the process is fully recycled.
+     * Checked by MainActivity before calling startForegroundService.
+     */
+    val isContaminated: Boolean get() = contaminated
 
     fun start(app: MainApplication, port: Int = 11434) {
-        if (server != null) return
+        if (isStarted || isStopping) return
 
-        serverScope.launch {
+        keyCollectorJob?.cancel()
+        keyCollectorJob = serverScope.launch {
             app.settingsDataStore.data
                 .map { it[stringPreferencesKey("api_key")] ?: "" }
                 .collect { key -> cachedApiKey.update { key } }
@@ -102,6 +194,51 @@ object ApiServer {
                         """{"status":"idle","model":null}"""
                     }
                     call.respondText(body, ContentType.Application.Json)
+                }
+
+                get("/capabilities") {
+                    call.response.headers.append("Access-Control-Allow-Origin", "*")
+                    val elig = readEligibility(app)
+                    val nodeName = Settings.Global.getString(app.contentResolver, "device_name")
+                        ?: Build.MODEL
+                    call.respondText(
+                        json.encodeToString(CapabilitiesResponse(
+                            node = nodeName,
+                            role = "edge_llm",
+                            service_alive = true,
+                            model_loaded = elig.modelLoaded,
+                            battery_percent = elig.batteryPercent,
+                            charging = elig.charging,
+                            thermal_status = elig.thermalStatus,
+                            foreground_service = true,
+                            eligible_for_inference = elig.eligible,
+                            reason_if_not_eligible = elig.reason,
+                            last_inference_at = lastInferenceAt,
+                            last_error = lastInferenceError
+                        )),
+                        ContentType.Application.Json
+                    )
+                }
+
+                get("/health") {
+                    call.response.headers.append("Access-Control-Allow-Origin", "*")
+                    val modelLoaded = app.activeSession != null
+                    val uptimeMs = if (serverStartTime > 0L) System.currentTimeMillis() - serverStartTime else 0L
+                    call.respondText("""{"status":"ok","node":"pocket-node","device":"android","model_loaded":$modelLoaded,"uptime_ms":$uptimeMs}""", ContentType.Application.Json)
+                }
+
+                if (com.pocketnode.app.BuildConfig.DEBUG) {
+                    post("/debug/eligibility/force_block") {
+                        call.response.headers.append("Access-Control-Allow-Origin", "*")
+                        debugForceBlock = true
+                        call.respondText("""{"ok":true,"debug_force_block":true}""", ContentType.Application.Json)
+                    }
+
+                    post("/debug/eligibility/clear") {
+                        call.response.headers.append("Access-Control-Allow-Origin", "*")
+                        debugForceBlock = false
+                        call.respondText("""{"ok":true,"debug_force_block":false}""", ContentType.Application.Json)
+                    }
                 }
 
                 post("/api/generate") {
@@ -135,12 +272,50 @@ object ApiServer {
                         return@post
                     }
 
-                    val prompt = req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
+                    val chatSession = app.activeSession
+                    val prompt = if (chatSession != null) {
+                        val meta = app.inference.nativeGetModelMetadata(chatSession.contextPtr)
+                        applyTemplate(req.messages.map { ChatMessageRequest(it.role, it.content) }, meta)
+                    } else {
+                        req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
+                    }
                     streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                }
+
+                post("/v1/chat/completions") {
+                    call.response.headers.append("Access-Control-Allow-Origin", "*")
+                    if (!authorize(call.request.headers[HttpHeaders.Authorization])) {
+                        call.respond(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}")
+                        return@post
+                    }
+
+                    val req = try {
+                        json.decodeFromString<OaiChatRequest>(call.receiveText())
+                    } catch (_: Exception) {
+                        call.respond(HttpStatusCode.BadRequest, "{\"error\":\"invalid json body\"}")
+                        return@post
+                    }
+
+                    if (req.stream == false) {
+                        call.respond(HttpStatusCode.BadRequest,
+                            "{\"error\":\"stream=false is not supported. Set stream:true or omit stream.\"}")
+                        return@post
+                    }
+
+                    val oaiSession = app.activeSession
+                    val prompt = if (oaiSession != null) {
+                        val meta = app.inference.nativeGetModelMetadata(oaiSession.contextPtr)
+                        applyTemplate(req.messages, meta)
+                    } else {
+                        req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
+                    }
+                    streamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, req.model ?: "pocket-node")
                 }
             }
         }
+        serverStartTime = System.currentTimeMillis()
         server!!.start(wait = false)
+        isStarted = true
     }
 
     private suspend fun streamResponse(
@@ -153,6 +328,20 @@ object ApiServer {
         topK: Int,
         repeatPenalty: Float
     ) {
+        if (isStopping) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            return
+        }
+
+        val elig = readEligibility(app)
+        if (!elig.eligible) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
+            )
+            return
+        }
+
         val session = app.activeSession
         if (session == null) {
             call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
@@ -176,7 +365,7 @@ object ApiServer {
                         override fun onStats(
                             tps: Float, ttftMs: Long, draftAcceptRate: Float,
                             totalTokens: Int, promptEvalTps: Float, backendName: String,
-                            nDrafted: Int, nAccepted: Int
+                            nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int
                         ) { /* Edge API stats not surfaced over HTTP */ }
                     }
                     try {
@@ -195,7 +384,10 @@ object ApiServer {
                             ubatchSize = 128,
                             callback = callback
                         )
+                        lastInferenceAt = nowIso8601()
+                        lastInferenceError = null
                     } catch (_: Exception) {
+                        lastInferenceError = "generation failed"
                         writer.write(json.encodeToString(ErrorChunk("generation failed")) + "\n")
                         writer.flush()
                     }
@@ -208,13 +400,226 @@ object ApiServer {
         }
     }
 
+    private suspend fun streamOaiResponse(
+        call: ApplicationCall,
+        app: MainApplication,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Float,
+        modelId: String
+    ) {
+        if (isStopping) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            return
+        }
+
+        val elig = readEligibility(app)
+        if (!elig.eligible) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
+            )
+            return
+        }
+
+        val session = app.activeSession
+        if (session == null) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            return
+        }
+
+        if (!inferenceMutex.tryLock()) {
+            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            return
+        }
+
+        val completionId = "chatcmpl-${System.currentTimeMillis()}"
+        val created = System.currentTimeMillis() / 1000L
+
+        try {
+            call.respondTextWriter(contentType = ContentType.Text.EventStream) {
+                val writer = this
+                withContext(Dispatchers.IO) {
+                    val callback = object : LlamaCallback {
+                        override fun onToken(token: String) {
+                            val chunk = OaiChunk(
+                                id = completionId,
+                                obj = "chat.completion.chunk",
+                                created = created,
+                                model = modelId,
+                                choices = listOf(OaiChoice(0, OaiDelta(content = token), null))
+                            )
+                            writer.write("data: ${json.encodeToString(chunk)}\n\n")
+                            writer.flush()
+                        }
+                        override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float,
+                            totalTokens: Int, promptEvalTps: Float, backendName: String,
+                            nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int) {}
+                    }
+                    try {
+                        app.inference.nativeGenerate(
+                            ctxPtr = session.contextPtr, prompt = prompt, imageEmbedPtr = 0L,
+                            maxTokens = maxTokens, temperature = temperature,
+                            topP = 0.9f, topK = 40, repeatPenalty = 1.1f,
+                            draftCtxPtr = 0L, nDraft = 0, batchSize = 512, ubatchSize = 128,
+                            callback = callback
+                        )
+                        lastInferenceAt = nowIso8601()
+                        lastInferenceError = null
+                    } catch (_: Exception) {
+                        lastInferenceError = "generation failed"
+                        writer.write("data: {\"error\":\"generation failed\"}\n\n")
+                        writer.flush()
+                    }
+                    // Stop chunk: delta must be {} not {"content":null} — safe string interpolation used intentionally
+                    writer.write("data: {\"id\":\"$completionId\",\"object\":\"chat.completion.chunk\",\"created\":$created,\"model\":${json.encodeToString(modelId)},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+                    writer.write("data: [DONE]\n\n")
+                    writer.flush()
+                }
+            }
+        } finally {
+            inferenceMutex.unlock()
+        }
+    }
+
+    private fun detectTemplate(metadata: Array<String>?): PromptTemplate {
+        val chatTemplate = metadata?.getOrNull(4) ?: ""
+        val arch = metadata?.getOrNull(0) ?: ""
+        return when {
+            chatTemplate.contains("<|im_start|>") -> PromptTemplate.ChatML
+            chatTemplate.contains("<|start_header_id|>") -> PromptTemplate.Llama3
+            arch.startsWith("qwen") -> PromptTemplate.ChatML
+            arch == "llama" -> PromptTemplate.Llama3
+            else -> PromptTemplate.ChatML
+        }
+    }
+
+    private fun applyTemplate(messages: List<ChatMessageRequest>, metadata: Array<String>?): String {
+        val template = detectTemplate(metadata)
+        val systemPrompt = messages.firstOrNull { it.role == "system" }?.content ?: ""
+        val nonSystem = messages.filter { it.role != "system" }
+        val lastUserIndex = nonSystem.indexOfLast { it.role == "user" }
+        val history = if (lastUserIndex > 0) nonSystem.take(lastUserIndex).map { it.role to it.content } else emptyList()
+        val userPrompt = nonSystem.getOrNull(lastUserIndex)?.content ?: ""
+        return template.format(systemPrompt, history, userPrompt)
+    }
+
     private fun authorize(authHeader: String?): Boolean {
         val expectedKey = cachedApiKey.value
         return expectedKey.isBlank() || authHeader == "Bearer $expectedKey"
     }
 
-    fun stop() {
+    private data class EligibilityResult(
+        val eligible: Boolean,
+        val reason: String?,
+        val modelLoaded: Boolean,
+        val batteryPercent: Int,
+        val charging: Boolean,
+        val thermalStatus: String,
+        val thermalCode: Int
+    )
+
+    private fun readEligibility(app: MainApplication): EligibilityResult {
+        if (debugForceBlock) {
+            val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            return EligibilityResult(
+                eligible = false,
+                reason = "debug_forced_block",
+                modelLoaded = app.activeSession != null,
+                batteryPercent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100),
+                charging = bm.isCharging,
+                thermalStatus = "none",
+                thermalCode = 0
+            )
+        }
+
+        val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val batteryPercent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
+        val charging = bm.isCharging
+
+        val thermalCode: Int
+        val thermalStatus: String
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("NewApi")
+            thermalCode = pm.currentThermalStatus
+            thermalStatus = thermalStatusString(thermalCode)
+        } else {
+            thermalCode = 0
+            thermalStatus = "none"
+        }
+
+        val modelLoaded = app.activeSession != null
+        val reason = when {
+            !modelLoaded -> "model_not_loaded"
+            batteryPercent < 30 && !charging -> "battery_below_threshold"
+            thermalCode >= 3 -> "thermal_severe"
+            else -> null
+        }
+        return EligibilityResult(
+            eligible = reason == null,
+            reason = reason,
+            modelLoaded = modelLoaded,
+            batteryPercent = batteryPercent,
+            charging = charging,
+            thermalStatus = thermalStatus,
+            thermalCode = thermalCode
+        )
+    }
+
+    private fun thermalStatusString(code: Int): String = when (code) {
+        0 -> "none"
+        1 -> "light"
+        2 -> "moderate"
+        3 -> "severe"
+        4 -> "critical"
+        5 -> "emergency"
+        6 -> "shutdown"
+        else -> "none"
+    }
+
+    private fun nowIso8601(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return sdf.format(java.util.Date())
+    }
+
+    /**
+     * Stops the server and drains any in-flight inference.
+     * Returns true if drain completed; false if it timed out.
+     * On false the caller MUST NOT free native context pointers —
+     * a bounded leak is safer than a use-after-free SIGSEGV.
+     *
+     * On timeout: isStopping is left true and isStarted false.
+     * The process is logically degraded — further start() calls are blocked
+     * for the remainder of the process lifetime, which is the right posture
+     * because the process now holds leaked native allocations.
+     */
+    fun stop(): Boolean {
+        if (!isStarted) return true
+        isStopping = true
+        ServiceHealthLog.record(EventType.STOP_DRAIN_STARTED)
+        val drained = runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(STOP_DRAIN_TIMEOUT_MS) { inferenceMutex.withLock { } } != null
+        }
+        if (drained) {
+            ServiceHealthLog.record(EventType.STOP_DRAIN_OK)
+        } else {
+            ServiceHealthLog.record(EventType.STOP_DRAIN_TIMEOUT,
+                "inference still running after ${STOP_DRAIN_TIMEOUT_MS}ms")
+        }
+        keyCollectorJob?.cancel()
+        keyCollectorJob = null
         server?.stop(gracePeriodMillis = 500, timeoutMillis = 1000)
         server = null
+        serverStartTime = 0L
+        isStarted = false
+        if (drained) {
+            isStopping = false
+        } else {
+            // Mark the process contaminated — never cleared, never restartable.
+            contaminated = true
+        }
+        return drained
     }
 }

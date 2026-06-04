@@ -47,6 +47,7 @@ android {
                 arguments += "-DGGML_OPENCL_USE_ADRENO_KERNELS=ON"
                 arguments += "-DGGML_CPU_KLEIDIAI=ON"
                 arguments += "-DGGML_OPENMP=ON"
+                arguments += "-DGGML_VULKAN=ON"
             }
         }
 

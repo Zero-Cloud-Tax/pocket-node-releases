@@ -1,0 +1,11 @@
+LEFT: small request through Edge Gate                           | RIGHT: recent allow_fold6 decisions
+PS> type launch_screenshots\small_request.json                 | {"ts":"2026-06-03T12:45:44.165023+00:00","original_model":"pocket-node-fold6","final_model":"pocket-node-fold6","decision":"allow_fold6","body_bytes":99,"msg_count":1,"chars":13}
+{                                                          | {"ts":"2026-06-03T21:09:03.639458+00:00","original_model":"pocket-node-fold6","final_model":"pocket-node-fold6","decision":"allow_fold6","body_bytes":159,"msg_count":1,"chars":47}
+  "model": "pocket-node-fold6",                         |
+  "messages": [                                           |
+    {"role": "user", "content": "Reply in one sentence: what is local inference?"} |
+  ],                                                       |
+  "stream": false                                         |
+}                                                          |
+PS> curl.exe -s http://100.66.89.35:4001/v1/chat/completions |
+{"error":{"message":"Authentication Error, No api key passed in.","code":"401"}} |

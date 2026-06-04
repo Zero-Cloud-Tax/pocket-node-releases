@@ -1,0 +1,27 @@
+---
+description: Project-specific Cursor rules for the Pocket Node Android repo
+globs:
+  - "**/*.kt"
+  - "**/*.kts"
+  - "**/AndroidManifest.xml"
+  - "app/src/main/cpp/**"
+  - "app/src/test/**"
+---
+
+# Pocket Node Rules
+
+- Treat this repo as an Android/Kotlin app with a single Gradle module: `:app`.
+- The application id is `com.pocketnode.app`. Keep that stable unless the user explicitly requests an app id migration.
+- Preserve the offline-first design. Do not introduce cloud services, hosted APIs, analytics SDKs, telemetry, or other network dependencies unless the user explicitly asks.
+- Prefer local/on-device implementation paths:
+  - UI is Jetpack Compose.
+  - Persistence is Room/DataStore.
+  - Background and async work uses Kotlin coroutines and Flow.
+  - Local inference lives in `com.pocketnode.app.inference` and native C++ under `app/src/main/cpp`.
+- Do not edit Kotlin source files unless the user explicitly asks for code changes in those files.
+- If you need to document behavior, prefer repo docs over code comments.
+- Keep build, install, and test instructions aligned with Gradle and adb on Windows.
+- When adding new files, keep them consistent with the existing package structure and naming conventions.
+- Avoid adding dependencies that require cloud credentials, external services, or remote execution.
+- If a task can be completed by editing docs or build metadata, do that instead of changing application logic.
+
