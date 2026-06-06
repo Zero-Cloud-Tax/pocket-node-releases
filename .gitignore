@@ -45,3 +45,11 @@ pocketnode_shot_*.png
 phone-check.png
 window_current.xml
 view.xml
+# Debug/verification screenshots and window dumps from dev sessions
+pocketnode_*.png
+window_*.xml
+baseline_*.png
+displayA.png
+displayB*.png
+after_*.png
+chat_screen.png
