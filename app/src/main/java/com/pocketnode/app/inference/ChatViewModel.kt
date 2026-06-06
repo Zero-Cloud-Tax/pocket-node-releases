@@ -23,6 +23,7 @@ import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.data.model.ModelRole
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -94,6 +95,7 @@ class ChatViewModel(
     private var activeConversationId = defaultConversationId
     private var generatingConversationId: Long? = null
     private var messagesJob: Job? = null
+    private var generationJob: Job? = null
     private val nativeSessionMutex = Mutex()
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
@@ -866,7 +868,7 @@ class ChatViewModel(
         benchmarkMode: Boolean = false,
         serviceStateSummary: String? = null
     ) {
-        viewModelScope.launch(Dispatchers.IO) {
+        generationJob = viewModelScope.launch(Dispatchers.IO) {
             sendMessageInternal(
                 text = text,
                 imageBytes = imageBytes,
@@ -1119,7 +1121,10 @@ class ChatViewModel(
                 modelError.value = e.message ?: "Generation failed."
             }
         } finally {
-            withContext(Dispatchers.Main) {
+            // NonCancellable ensures this cleanup block runs even if generationJob was cancelled
+            // via stopGeneration(). Without it, withContext(Dispatchers.Main) would throw
+            // CancellationException and generatingConversationId would never be cleared.
+            withContext(NonCancellable + Dispatchers.Main) {
                 generatingConversationId = null
                 currentAssistantMessage.value = ""
                 isGenerating.value = false
@@ -1135,7 +1140,23 @@ class ChatViewModel(
     }
 
     fun stopGeneration() {
-        if (contextPtr != 0L) inference.nativeStopGeneration(contextPtr)
+        logInfo("Stop: Kotlin stop requested")
+        // Set the native abort flag first — before any coroutine cancellation —
+        // so the in-flight nativeGenerate call sees the flag at its next check point.
+        if (contextPtr != 0L) {
+            inference.nativeStopGeneration(contextPtr)
+            logInfo("Stop: nativeStopGeneration called")
+        }
+        // Reset UI immediately so the send button re-enables before native returns.
+        isGenerating.value = false
+        visibleIsGenerating.value = false
+        currentAssistantMessage.value = ""
+        visibleAssistantMessage.value = ""
+        syncVisibleGenerationState()
+        // Cancel the coroutine so post-generation DB saves are skipped for aborted output.
+        generationJob?.cancel()
+        generationJob = null
+        logInfo("Stop: UI returned to idle after stop")
     }
 
     fun dismissError() {
