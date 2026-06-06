@@ -56,15 +56,18 @@ fun ModelsScreen(
     val operatorDownloadState by viewModel.operatorDownloadState.collectAsState()
     val storageStats by viewModel.storageStats.collectAsState()
     val importError by viewModel.importError.collectAsState()
+    val statusMessage by viewModel.statusMessage.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     var showUrlDialog by remember { mutableStateOf(false) }
     var downloadUrl by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<LocalModel?>(null) }
+    var confirmCleanupFailedPrimaries by remember { mutableStateOf(false) }
 
     val chatModels = models.filter { it.role != ModelRole.DRAFT.name }
     val draftModels = models.filter { it.role == ModelRole.DRAFT.name }
+    val failedPrimaryCount = chatModels.count { it.verificationStatus == VerificationStatus.FAILED }
 
     LaunchedEffect(Unit) {
         viewModel.importCompletedDownloads(context)
@@ -75,6 +78,13 @@ fun ModelsScreen(
         importError?.let { msg ->
             snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Long)
             viewModel.clearImportError()
+        }
+    }
+
+    LaunchedEffect(statusMessage) {
+        statusMessage?.let { msg ->
+            snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Long)
+            viewModel.clearStatusMessage()
         }
     }
 
@@ -171,6 +181,27 @@ fun ModelsScreen(
         storageStats?.let { stats ->
             StorageHeaderCard(stats, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = { viewModel.auditInstalledModels() }) {
+                Text("Audit Models")
+            }
+            if (failedPrimaryCount > 0) {
+                OutlinedButton(
+                    onClick = { confirmCleanupFailedPrimaries = true },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Clean Failed Primary ($failedPrimaryCount)")
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
 
         if (!isPro && models.isNotEmpty()) {
             Surface(
@@ -310,6 +341,34 @@ fun ModelsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (confirmCleanupFailedPrimaries) {
+        AlertDialog(
+            onDismissRequest = { confirmCleanupFailedPrimaries = false },
+            title = { Text("Remove failed primary models?") },
+            text = {
+                Text(
+                    "This removes only failed primary GGUF files from Pocket Node's app-managed model directory. " +
+                    "Draft models and user-owned Downloads or SAF source files are left untouched."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.cleanupFailedPrimaryModels()
+                        confirmCleanupFailedPrimaries = false
+                    }
+                ) {
+                    Text("Clean", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmCleanupFailedPrimaries = false }) {
+                    Text("Cancel")
+                }
             }
         )
     }

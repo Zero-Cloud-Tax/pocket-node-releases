@@ -9,6 +9,9 @@ interface ModelDao {
     @Query("SELECT * FROM models ORDER BY addedAt DESC")
     fun getAllModels(): Flow<List<LocalModel>>
 
+    @Query("SELECT * FROM models ORDER BY addedAt DESC")
+    suspend fun getAllModelsSnapshot(): List<LocalModel>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertModel(model: LocalModel)
 
@@ -18,6 +21,9 @@ interface ModelDao {
     @Query("SELECT * FROM models WHERE id = :id LIMIT 1")
     suspend fun getModelById(id: String): LocalModel?
 
-    @Query("SELECT * FROM models WHERE role = 'MAIN' ORDER BY addedAt DESC LIMIT 1")
+    @Query("SELECT * FROM models WHERE path = :path LIMIT 1")
+    suspend fun getModelByPath(path: String): LocalModel?
+
+    @Query("SELECT * FROM models WHERE role = 'MAIN' AND verification_status != 'FAILED' ORDER BY addedAt DESC LIMIT 1")
     suspend fun getFirstMainModel(): LocalModel?
 }

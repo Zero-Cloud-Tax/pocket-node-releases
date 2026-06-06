@@ -16,7 +16,51 @@ interface LlamaCallback {
     )
 }
 
-class LlamaInference {
+interface InferenceEngine {
+    fun nativeLoadModel(modelPath: String, nGpuLayers: Int): Long
+    fun nativeFreeModel(modelPtr: Long)
+    fun nativeCreateContext(modelPtr: Long, contextSize: Int, nThreads: Int): Long
+    fun nativeFreeContext(ctxPtr: Long)
+
+    fun nativeLoadDraftModel(modelPath: String, nGpuLayers: Int): Long
+    fun nativeFreeDraftModel(draftModelPtr: Long)
+    fun nativeCreateDraftContext(draftModelPtr: Long, contextSize: Int, nThreads: Int): Long
+    fun nativeFreeDraftContext(draftCtxPtr: Long)
+
+    fun nativeGenerate(
+        ctxPtr: Long,
+        prompt: String,
+        imageEmbedPtr: Long,
+        maxTokens: Int,
+        temperature: Float,
+        topP: Float,
+        topK: Int,
+        repeatPenalty: Float,
+        draftCtxPtr: Long,
+        nDraft: Int,
+        batchSize: Int,
+        ubatchSize: Int,
+        callback: LlamaCallback
+    )
+    fun nativeStopGeneration(ctxPtr: Long)
+    fun nativeClearCache(ctxPtr: Long)
+
+    fun nativeGetTokenCount(modelPtr: Long, text: String): Int
+    fun nativeGetContextLength(modelPtr: Long): Int
+    fun nativeGetEmbeddingSize(modelPtr: Long): Int
+    fun nativeGetVocabSize(modelPtr: Long): Int
+    fun nativeGetLastError(): String
+    fun nativeGetBackendName(): String
+    fun nativeGetModelMetadata(contextPtr: Long): Array<String>?
+    fun nativeCloseFd(fd: Int)
+
+    fun nativeLoadMmproj(mmprojPath: String): Long
+    fun nativeFreeMmproj(ctxPtr: Long)
+    fun nativeMakeImageEmbed(ctxPtr: Long, imageBytes: ByteArray): Long
+    fun nativeFreeImageEmbed(embedPtr: Long)
+}
+
+class LlamaInference : InferenceEngine {
 
     companion object {
         init {
@@ -25,19 +69,19 @@ class LlamaInference {
     }
 
     // ── Main model ──────────────────────────────────────────────────────────
-    external fun nativeLoadModel(modelPath: String, nGpuLayers: Int): Long
-    external fun nativeFreeModel(modelPtr: Long)
-    external fun nativeCreateContext(modelPtr: Long, contextSize: Int, nThreads: Int): Long
-    external fun nativeFreeContext(ctxPtr: Long)
+    override external fun nativeLoadModel(modelPath: String, nGpuLayers: Int): Long
+    override external fun nativeFreeModel(modelPtr: Long)
+    override external fun nativeCreateContext(modelPtr: Long, contextSize: Int, nThreads: Int): Long
+    override external fun nativeFreeContext(ctxPtr: Long)
 
     // ── Draft model (speculative decoding) ──────────────────────────────────
-    external fun nativeLoadDraftModel(modelPath: String, nGpuLayers: Int): Long
-    external fun nativeFreeDraftModel(draftModelPtr: Long)
-    external fun nativeCreateDraftContext(draftModelPtr: Long, contextSize: Int, nThreads: Int): Long
-    external fun nativeFreeDraftContext(draftCtxPtr: Long)
+    override external fun nativeLoadDraftModel(modelPath: String, nGpuLayers: Int): Long
+    override external fun nativeFreeDraftModel(draftModelPtr: Long)
+    override external fun nativeCreateDraftContext(draftModelPtr: Long, contextSize: Int, nThreads: Int): Long
+    override external fun nativeFreeDraftContext(draftCtxPtr: Long)
 
     // ── Generation ──────────────────────────────────────────────────────────
-    external fun nativeGenerate(
+    override external fun nativeGenerate(
         ctxPtr: Long,
         prompt: String,
         imageEmbedPtr: Long,
@@ -52,22 +96,22 @@ class LlamaInference {
         ubatchSize: Int,     // micro-batch size (controls TTFT)
         callback: LlamaCallback
     )
-    external fun nativeStopGeneration(ctxPtr: Long)
-    external fun nativeClearCache(ctxPtr: Long)
+    override external fun nativeStopGeneration(ctxPtr: Long)
+    override external fun nativeClearCache(ctxPtr: Long)
 
     // ── Model info ──────────────────────────────────────────────────────────
-    external fun nativeGetTokenCount(modelPtr: Long, text: String): Int
-    external fun nativeGetContextLength(modelPtr: Long): Int
-    external fun nativeGetEmbeddingSize(modelPtr: Long): Int
-    external fun nativeGetVocabSize(modelPtr: Long): Int
-    external fun nativeGetLastError(): String
-    external fun nativeGetBackendName(): String
-    external fun nativeGetModelMetadata(contextPtr: Long): Array<String>?
-    external fun nativeCloseFd(fd: Int)
+    override external fun nativeGetTokenCount(modelPtr: Long, text: String): Int
+    override external fun nativeGetContextLength(modelPtr: Long): Int
+    override external fun nativeGetEmbeddingSize(modelPtr: Long): Int
+    override external fun nativeGetVocabSize(modelPtr: Long): Int
+    override external fun nativeGetLastError(): String
+    override external fun nativeGetBackendName(): String
+    override external fun nativeGetModelMetadata(contextPtr: Long): Array<String>?
+    override external fun nativeCloseFd(fd: Int)
 
     // ── Multi-Modal ─────────────────────────────────────────────────────────
-    external fun nativeLoadMmproj(mmprojPath: String): Long
-    external fun nativeFreeMmproj(ctxPtr: Long)
-    external fun nativeMakeImageEmbed(ctxPtr: Long, imageBytes: ByteArray): Long
-    external fun nativeFreeImageEmbed(embedPtr: Long)
+    override external fun nativeLoadMmproj(mmprojPath: String): Long
+    override external fun nativeFreeMmproj(ctxPtr: Long)
+    override external fun nativeMakeImageEmbed(ctxPtr: Long, imageBytes: ByteArray): Long
+    override external fun nativeFreeImageEmbed(embedPtr: Long)
 }

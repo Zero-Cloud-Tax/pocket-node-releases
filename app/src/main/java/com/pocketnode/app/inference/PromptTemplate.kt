@@ -52,4 +52,11 @@ sealed class PromptTemplate(val name: String) {
             return sb.toString()
         }
     }
+
+    // Auto: defers to PromptTemplateResolver at generation time.
+    // format() is a safe fallback — in practice the resolver picks a real template before format() is called.
+    object Auto : PromptTemplate("Auto") {
+        override fun format(systemPrompt: String, history: List<Pair<String, String>>, prompt: String): String =
+            ChatML.format(systemPrompt, history, prompt)
+    }
 }
