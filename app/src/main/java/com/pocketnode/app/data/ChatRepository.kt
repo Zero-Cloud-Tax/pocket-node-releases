@@ -44,6 +44,9 @@ class ChatRepository(private val chatDao: ChatDao) {
     suspend fun updateMessage(message: ChatMessage) =
         chatDao.updateMessage(message)
 
+    suspend fun deleteMessage(messageId: Long) =
+        chatDao.deleteMessageById(messageId)
+
     suspend fun clearConversation(conversationId: Long) {
         chatDao.deleteMessagesForConversation(conversationId)
         chatDao.deleteConversation(conversationId)

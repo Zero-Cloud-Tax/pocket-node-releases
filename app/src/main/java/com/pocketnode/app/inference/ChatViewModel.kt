@@ -21,6 +21,7 @@ import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.data.model.KnowledgeChunk
 import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.data.model.ModelRole
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -96,6 +97,8 @@ class ChatViewModel(
     private var generatingConversationId: Long? = null
     private var messagesJob: Job? = null
     private var generationJob: Job? = null
+    @Volatile
+    private var stopRequested = false
     private val nativeSessionMutex = Mutex()
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
@@ -868,7 +871,16 @@ class ChatViewModel(
         benchmarkMode: Boolean = false,
         serviceStateSummary: String? = null
     ) {
+        val priorGenerationJob = generationJob
         generationJob = viewModelScope.launch(Dispatchers.IO) {
+            if (priorGenerationJob != null) {
+                logInfo("Chat generation: waiting for prior job cleanup before starting a new prompt")
+                priorGenerationJob.join()
+            }
+            stopRequested = false
+            logInfo(
+                "Chat generation: new generation requested isGenerating=${isGenerating.value} stopRequested=$stopRequested"
+            )
             sendMessageInternal(
                 text = text,
                 imageBytes = imageBytes,
@@ -989,6 +1001,7 @@ class ChatViewModel(
             val assistantMsgId = repository.saveMessage(
                 ChatMessage(conversationId = conversationId, role = "assistant", content = "")
             )
+            logInfo("Chat generation: assistant placeholder created id=$assistantMsgId")
 
             var partialMessage = ""
             var lastUiUpdateTime = 0L
@@ -1112,6 +1125,11 @@ class ChatViewModel(
             logInfo(
                 "Chat persistence[assistant]: conversationId=$conversationId finalAssistantPreview=\"${preview(finalAssistantOutput.visibleText)}\" savedVisible=true"
             )
+        } catch (e: CancellationException) {
+            logInfo(
+                "Chat generation cancelled: stopRequested=$stopRequested conversationId=$conversationId"
+            )
+            throw e
         } catch (e: OutOfMemoryError) {
             withContext(Dispatchers.Main) {
                 modelError.value = "Out of memory during generation — try reducing context size."
@@ -1124,6 +1142,21 @@ class ChatViewModel(
             // NonCancellable ensures this cleanup block runs even if generationJob was cancelled
             // via stopGeneration(). Without it, withContext(Dispatchers.Main) would throw
             // CancellationException and generatingConversationId would never be cleared.
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (stopRequested) {
+                    val abortedAssistant = repository
+                        .getMessagesSnapshot(conversationId)
+                        .lastOrNull { it.role == "assistant" && it.content.isBlank() }
+                    if (abortedAssistant != null) {
+                        repository.deleteMessage(abortedAssistant.id)
+                        logInfo(
+                            "Stop recovery: removed empty assistant placeholder id=${abortedAssistant.id} conversationId=$conversationId"
+                        )
+                    } else {
+                        logInfo("Stop recovery: no empty assistant placeholder found for conversationId=$conversationId")
+                    }
+                }
+            }
             withContext(NonCancellable + Dispatchers.Main) {
                 generatingConversationId = null
                 currentAssistantMessage.value = ""
@@ -1141,6 +1174,7 @@ class ChatViewModel(
 
     fun stopGeneration() {
         logInfo("Stop: Kotlin stop requested")
+        stopRequested = true
         // Set the native abort flag first — before any coroutine cancellation —
         // so the in-flight nativeGenerate call sees the flag at its next check point.
         if (contextPtr != 0L) {
