@@ -13,13 +13,22 @@ import androidx.compose.ui.unit.dp
 import com.pocketnode.app.diagnostics.DiagnosticsViewModel
 import com.pocketnode.app.diagnostics.ServiceHealthLog
 import com.pocketnode.app.inference.InferenceStats
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DiagnosticsScreen(
     vm: DiagnosticsViewModel,
     lastInferenceStats: InferenceStats?,
     activeModelName: String?,
-    backendName: String
+    backendName: String,
+    activeModelPath: String?,
+    verificationStatus: String?,
+    isDraftModel: Boolean,
+    isPrimaryModel: Boolean,
+    lastInferenceAtMillis: Long?,
+    modelLoaded: Boolean
 ) {
     val hardware by vm.hardware.collectAsState()
     val models   by vm.models.collectAsState()
@@ -99,12 +108,20 @@ fun DiagnosticsScreen(
         // ── D. Model ───────────────────────────────────────────────────────────
         DiagCard("Model") {
             DiagRow("Active model", activeModelName ?: "None")
+            DiagRow("Resolved file", activeModelPath ?: "Unavailable", mono = true)
+            DiagRow("Loaded", if (modelLoaded) "true" else "false")
+            DiagRow("Verification", verificationStatus ?: activeModel?.verificationStatus ?: "Unknown")
+            DiagRow("Role", when {
+                isDraftModel -> "Draft model"
+                isPrimaryModel -> "Primary model"
+                else -> "Unknown"
+            })
+            DiagRow("Last inference", formatDiagTime(lastInferenceAtMillis))
             if (activeModel != null) {
                 val sizeMb = if (activeModel.sizeBytes > 0)
                     "%.0f MB".format(activeModel.sizeBytes / (1024f * 1024f))
                 else "Unknown"
                 DiagRow("Size", sizeMb)
-                DiagRow("Verification", activeModel.verificationStatus)
                 DiagRow("SHA-256",
                     activeModel.sha256?.take(16)?.plus("…") ?: "Not computed",
                     mono = true)
@@ -209,4 +226,10 @@ private fun thermalColor(status: Int): Color = when (status) {
     0, 1 -> Color(0xFF4CAF50) // green — None / Light
     2    -> Color(0xFFFFC107) // amber — Moderate
     else -> Color(0xFFF44336) // red   — Severe and above
+}
+
+private fun formatDiagTime(lastInferenceAtMillis: Long?): String {
+    if (lastInferenceAtMillis == null) return "Not available yet"
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    return formatter.format(Date(lastInferenceAtMillis))
 }

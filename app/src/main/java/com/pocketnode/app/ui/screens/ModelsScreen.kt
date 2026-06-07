@@ -38,6 +38,8 @@ import com.pocketnode.app.data.model.RECOMMENDED_MODELS
 import com.pocketnode.app.data.model.RemoteModel
 import com.pocketnode.app.inference.InferenceStats
 import com.pocketnode.app.licensing.ProGate
+import com.pocketnode.app.ui.components.ModelRoleBadge
+import com.pocketnode.app.ui.components.VerificationStatusBadge
 import kotlinx.coroutines.launch
 
 @Composable
@@ -547,9 +549,9 @@ fun InstalledModelCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     if (isDraft) {
-                        Badge(containerColor = Color(0xFFFF6D00)) {
-                            Text("DRAFT", color = Color.White, fontSize = 10.sp)
-                        }
+                        ModelRoleBadge("DRAFT_MODEL", Color(0xFFB45309))
+                    } else {
+                        ModelRoleBadge("PRIMARY_MODEL", Color(0xFF1565C0))
                     }
                     if (quantMatch != null) {
                         Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
@@ -558,7 +560,7 @@ fun InstalledModelCard(
                                 fontSize = 10.sp)
                         }
                     }
-                    VerificationBadge(model.verificationStatus)
+                    VerificationStatusBadge(model.verificationStatus)
                     if (tpsLabel != null) {
                         Badge(containerColor = MaterialTheme.colorScheme.tertiaryContainer) {
                             Text(tpsLabel,
@@ -566,6 +568,21 @@ fun InstalledModelCard(
                                 fontSize = 10.sp)
                         }
                     }
+                }
+                if (model.verificationStatus == VerificationStatus.FAILED) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Verification failed. Rescan Model Hub, re-import this GGUF, or choose another model.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else if (model.verificationStatus == VerificationStatus.UNKNOWN_HASH) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Hash is not in the trusted registry yet. Rescan after updates or re-import if you expected a verified model.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             if (onToggleRole != null) {
@@ -817,16 +834,3 @@ fun OperatorDownloadCard(
     }
 }
 
-@Composable
-private fun VerificationBadge(status: String) {
-    val (label, color) = when (status) {
-        VerificationStatus.VERIFIED     -> "Verified"     to Color(0xFF4CAF50)
-        VerificationStatus.UNKNOWN_HASH -> "Unknown Hash" to Color(0xFFFF9800)
-        VerificationStatus.HASHING      -> "Hashing…"    to MaterialTheme.colorScheme.primary
-        VerificationStatus.FAILED       -> "Failed"       to MaterialTheme.colorScheme.error
-        else                            -> return
-    }
-    Badge(containerColor = color.copy(alpha = 0.15f)) {
-        Text(label, color = color, fontSize = 9.sp)
-    }
-}

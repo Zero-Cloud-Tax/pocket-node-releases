@@ -487,11 +487,17 @@ class MainActivity : ComponentActivity() {
                                     messages = chatVm.messages,
                                     currentAssistantMessage = chatVm.visibleAssistantMessage.value,
                                     isGenerating = chatVm.visibleIsGenerating.value,
+                                    isStopping = chatVm.isStopping.value,
                                     isLoadingModel = chatVm.isLoadingModel.value,
                                     isModelReady = chatVm.isModelReady.value,
                                     modelName = chatVm.modelName.value,
                                     modelError = chatVm.modelError.value,
                                     backendName = chatVm.backendName.value,
+                                    selectedModelPath = chatVm.selectedModelPath.value,
+                                    verificationStatus = chatVm.selectedModelVerificationStatus.value,
+                                    isDraftModel = chatVm.selectedModelIsDraft.value,
+                                    isPrimaryModel = chatVm.selectedModelIsPrimary.value,
+                                    lastInferenceAtMillis = chatVm.lastSuccessfulInferenceAtMillis.value,
                                     onSendMessage = { text, imageBytes, _, _, _ ->
                                         chatVm.sendMessage(
                                             text = text,
@@ -603,7 +609,13 @@ class MainActivity : ComponentActivity() {
                                     vm = diagVm,
                                     lastInferenceStats = chatVm.lastInferenceStats.value,
                                     activeModelName = chatVm.modelName.value,
-                                    backendName = chatVm.backendName.value
+                                    backendName = chatVm.backendName.value,
+                                    activeModelPath = chatVm.selectedModelPath.value,
+                                    verificationStatus = chatVm.selectedModelVerificationStatus.value,
+                                    isDraftModel = chatVm.selectedModelIsDraft.value,
+                                    isPrimaryModel = chatVm.selectedModelIsPrimary.value,
+                                    lastInferenceAtMillis = chatVm.lastSuccessfulInferenceAtMillis.value,
+                                    modelLoaded = chatVm.isModelReady.value
                                 )
                             }
 

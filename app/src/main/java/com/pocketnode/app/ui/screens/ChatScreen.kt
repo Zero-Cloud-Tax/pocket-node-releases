@@ -40,6 +40,9 @@ import com.pocketnode.app.inference.CompatibilityStatus
 import com.pocketnode.app.inference.DocumentReader
 import com.pocketnode.app.inference.InferenceStats
 import com.pocketnode.app.ui.components.ChatBubble
+import com.pocketnode.app.ui.components.BackendStatusChip
+import com.pocketnode.app.ui.components.InferenceStatusCard
+import com.pocketnode.app.ui.components.InferenceStatusCardState
 import com.pocketnode.app.ui.components.MarkdownText
 import com.pocketnode.app.ui.components.TypingIndicator
 import kotlinx.coroutines.launch
@@ -49,11 +52,17 @@ fun ChatScreen(
     messages: List<ChatMessage>,
     currentAssistantMessage: String,
     isGenerating: Boolean,
+    isStopping: Boolean,
     isLoadingModel: Boolean,
     isModelReady: Boolean,
     modelName: String?,
     modelError: String?,
     backendName: String,
+    selectedModelPath: String?,
+    verificationStatus: String?,
+    isDraftModel: Boolean,
+    isPrimaryModel: Boolean,
+    lastInferenceAtMillis: Long?,
     onSendMessage: (String, ByteArray?, Float, Float, Int) -> Unit,
     onClearChat: () -> Unit,
     onStopGeneration: () -> Unit,
@@ -175,23 +184,8 @@ fun ChatScreen(
                     )
                     // GPU/CPU indicator chip
                     if (isModelReady) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (BackendInfo.isVulkanFamily(backendName))
-                                MaterialTheme.colorScheme.primaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp)
-                        ) {
-                            Text(
-                                backendName,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (BackendInfo.isVulkanFamily(backendName))
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Box(modifier = Modifier.padding(top = 2.dp)) {
+                            BackendStatusChip(backendName)
                         }
                     }
                 }
@@ -217,6 +211,22 @@ fun ChatScreen(
                 }
             }
 
+            if (isModelReady) {
+                InferenceStatusCard(
+                    state = InferenceStatusCardState(
+                        selectedModelName = modelName,
+                        resolvedModelPath = selectedModelPath,
+                        verificationStatus = verificationStatus,
+                        isDraftModel = isDraftModel,
+                        isPrimaryModel = isPrimaryModel,
+                        backendName = backendName,
+                        lastInferenceAtMillis = lastInferenceAtMillis,
+                        modelLoaded = isModelReady
+                    ),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
             // ── Error banner ──
             AnimatedVisibility(visible = modelError != null) {
                 Surface(
@@ -237,7 +247,12 @@ fun ChatScreen(
                                     modifier = Modifier.size(16.dp))
                             }
                         }
-                        if (modelError?.contains("not found", ignoreCase = true) == true) {
+                        val shouldShowModelHubAction =
+                            modelError?.contains("not found", ignoreCase = true) == true ||
+                                modelError?.contains("verification", ignoreCase = true) == true ||
+                                modelError?.contains("re-import", ignoreCase = true) == true ||
+                                modelError?.contains("rescan", ignoreCase = true) == true
+                        if (shouldShowModelHubAction) {
                             TextButton(
                                 onClick = onNavigateToModels,
                                 contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
@@ -362,8 +377,9 @@ fun ChatScreen(
                     attachmentWarning = null
                 },
                 isGenerating = isGenerating,
+                isStopping = isStopping,
                 onStop = onStopGeneration,
-                enabled = isModelReady && !isLoadingModel,
+                enabled = isModelReady && !isLoadingModel && !isStopping,
                 onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain", "image/*")) },
                 attachedFileName = attachedFileName,
                 onRemoveAttachment = {
@@ -385,6 +401,7 @@ fun ChatInputBar(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     isGenerating: Boolean,
+    isStopping: Boolean,
     onStop: () -> Unit,
     enabled: Boolean,
     onAttach: () -> Unit,
@@ -393,6 +410,32 @@ fun ChatInputBar(
     isReadingDocument: Boolean
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
+        AnimatedVisibility(visible = isStopping) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        "Stopping...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+
         if (attachedFileName != null || isReadingDocument) {
             Surface(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -444,7 +487,7 @@ fun ChatInputBar(
                     focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
-                enabled = enabled && !isGenerating,
+                enabled = enabled && !isGenerating && !isStopping,
                 maxLines = 4
             )
 
@@ -454,11 +497,13 @@ fun ChatInputBar(
                 onClick = if (isGenerating) onStop else onSend,
                 modifier = Modifier.size(48.dp),
                 containerColor = when {
+                    isStopping -> MaterialTheme.colorScheme.secondaryContainer
                     isGenerating -> MaterialTheme.colorScheme.error
                     text.isNotBlank() && enabled -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.surfaceVariant
                 },
                 contentColor = when {
+                    isStopping -> MaterialTheme.colorScheme.onSecondaryContainer
                     isGenerating -> MaterialTheme.colorScheme.onError
                     text.isNotBlank() && enabled -> MaterialTheme.colorScheme.onPrimary
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -466,7 +511,13 @@ fun ChatInputBar(
                 elevation = FloatingActionButtonDefaults.elevation(0.dp, 0.dp),
                 shape = CircleShape
             ) {
-                if (isGenerating) {
+                if (isStopping) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                } else if (isGenerating) {
                     Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(20.dp))
                 } else {
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(20.dp))

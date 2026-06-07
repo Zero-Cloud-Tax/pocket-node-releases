@@ -107,6 +107,7 @@ class ChatViewModel(
     val messages = mutableStateListOf<ChatMessage>()
     val currentConversationId = mutableStateOf(defaultConversationId)
     val isGenerating = mutableStateOf(false)
+    val isStopping = mutableStateOf(false)
     val currentAssistantMessage = mutableStateOf("")
     val visibleIsGenerating = mutableStateOf(false)
     val visibleAssistantMessage = mutableStateOf("")
@@ -115,6 +116,11 @@ class ChatViewModel(
     val modelName = mutableStateOf<String?>(null)
     val modelError = mutableStateOf<String?>(null)
     val backendName = mutableStateOf("CPU")
+    val selectedModelPath = mutableStateOf<String?>(null)
+    val selectedModelVerificationStatus = mutableStateOf<String?>(null)
+    val selectedModelIsDraft = mutableStateOf(false)
+    val selectedModelIsPrimary = mutableStateOf(false)
+    val lastSuccessfulInferenceAtMillis = mutableStateOf<Long?>(null)
 
     val mainModelMetadata = mutableStateOf<ModelMetadata?>(null)
     val draftModelMetadata = mutableStateOf<ModelMetadata?>(null)
@@ -269,9 +275,9 @@ class ChatViewModel(
 
             validatePrimaryModelSelection(selectedIdentity)?.let { error ->
                 withContext(Dispatchers.Main) {
+                    applySelectedModelUiState(selectedIdentity)
                     modelError.value = error
                     isModelReady.value = false
-                    modelName.value = selectedIdentity.selectedModelName
                 }
                 return@launch
             }
@@ -306,7 +312,8 @@ class ChatViewModel(
                 isLoadingModel.value = true
                 isModelReady.value = false
                 modelError.value = null
-                modelName.value = displayName
+                applySelectedModelUiState(selectedIdentity)
+                isStopping.value = false
             }
 
             // RAM Validation
@@ -388,6 +395,7 @@ class ChatViewModel(
                 }
 
                 withContext(Dispatchers.Main) {
+                    applySelectedModelUiState(selectedIdentity)
                     isModelReady.value = true
                     backendName.value = try {
                         BackendInfo.normalize(inference.nativeGetBackendName())
@@ -622,18 +630,26 @@ class ChatViewModel(
         )
     }
 
+    private fun applySelectedModelUiState(selection: ResolvedModelSelection) {
+        selectedModelPath.value = selection.resolvedModelPath
+        selectedModelVerificationStatus.value = selection.verificationStatus
+        selectedModelIsDraft.value = selection.isDraft
+        selectedModelIsPrimary.value = selection.isPrimary
+        modelName.value = selection.selectedModelName
+    }
+
     private fun validatePrimaryModelSelection(selection: ResolvedModelSelection): String? {
         if (selection.isDraft) {
             logInfo(
                 "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus ?: "unknown"} reason=draft_selected_for_primary"
             )
-            return "Draft model selected for primary chat: ${selection.selectedModelName}. Choose a main model from Chat Models."
+            return "Draft model selected for chat: ${selection.selectedModelName}. Choose a Primary model from Chat Models or move this draft back to the draft slot."
         }
         if (selection.verificationStatus == VerificationStatus.FAILED && selection.isPrimary) {
             logInfo(
                 "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus} reason=failed_verification"
             )
-            return "Primary model failed integrity verification: ${selection.selectedModelName}. Re-download or re-import the correct GGUF before chatting."
+            return "Primary model failed verification: ${selection.selectedModelName}. Rescan Model Hub, re-import the GGUF, or select another verified model before chatting."
         }
         val knownOperatorHash = HashUtils.KNOWN_HASHES[selection.selectedModelName]
         if (knownOperatorHash != null && selection.sha256Prefix != null) {
@@ -642,7 +658,7 @@ class ChatViewModel(
                 logInfo(
                     "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus ?: "unknown"} reason=sha_prefix_mismatch"
                 )
-                return "Primary model identity mismatch: ${selection.selectedModelName} does not match the expected PocketNode Operator artifact."
+                return "Primary model identity mismatch: ${selection.selectedModelName} does not match the expected Pocket Node artifact. Rescan, re-import, or select another model."
             }
         }
         return null
@@ -834,6 +850,10 @@ class ChatViewModel(
         this.modelName.value = modelName
         this.backendName.value = backend
         this.isModelReady.value = true
+        this.selectedModelPath.value = "test-model.gguf"
+        this.selectedModelVerificationStatus.value = VerificationStatus.VERIFIED
+        this.selectedModelIsDraft.value = false
+        this.selectedModelIsPrimary.value = true
         loadedModelPath = "test-model.gguf"
         loadedContextSize = DEFAULT_CONTEXT_SIZE
         loadedThreadCount = 4
@@ -878,6 +898,9 @@ class ChatViewModel(
                 priorGenerationJob.join()
             }
             stopRequested = false
+            withContext(Dispatchers.Main) {
+                isStopping.value = false
+            }
             logInfo(
                 "Chat generation: new generation requested isGenerating=${isGenerating.value} stopRequested=$stopRequested"
             )
@@ -1103,6 +1126,11 @@ class ChatViewModel(
                         effectiveDraftCtx, nDraft, batchSize, ubatchSize, callback
                     )
                 }
+                if (!stopRequested) {
+                    withContext(Dispatchers.Main) {
+                        lastSuccessfulInferenceAtMillis.value = System.currentTimeMillis()
+                    }
+                }
             } finally {
                 if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
                 if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
@@ -1161,6 +1189,7 @@ class ChatViewModel(
                 generatingConversationId = null
                 currentAssistantMessage.value = ""
                 isGenerating.value = false
+                isStopping.value = false
                 syncVisibleGenerationState()
             }
         }
@@ -1173,15 +1202,18 @@ class ChatViewModel(
     }
 
     fun stopGeneration() {
+        if (generationJob == null || stopRequested) return
         logInfo("Stop: Kotlin stop requested")
         stopRequested = true
+        isStopping.value = true
         // Set the native abort flag first — before any coroutine cancellation —
         // so the in-flight nativeGenerate call sees the flag at its next check point.
         if (contextPtr != 0L) {
             inference.nativeStopGeneration(contextPtr)
             logInfo("Stop: nativeStopGeneration called")
         }
-        // Reset UI immediately so the send button re-enables before native returns.
+        // Reset streamed output immediately, but keep a visible stopping state
+        // until coroutine cleanup completes.
         isGenerating.value = false
         visibleIsGenerating.value = false
         currentAssistantMessage.value = ""
@@ -1189,8 +1221,7 @@ class ChatViewModel(
         syncVisibleGenerationState()
         // Cancel the coroutine so post-generation DB saves are skipped for aborted output.
         generationJob?.cancel()
-        generationJob = null
-        logInfo("Stop: UI returned to idle after stop")
+        logInfo("Stop: UI entered stopping state")
     }
 
     fun dismissError() {
@@ -1319,6 +1350,7 @@ class ChatViewModel(
         loadedThreadCount = 0
         loadedGpuLayers = 0
         messagesJob?.cancel()
+        isStopping.value = false
         closeFdIfNeeded()
     }
 }
