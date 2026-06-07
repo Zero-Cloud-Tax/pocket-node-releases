@@ -1,0 +1,27 @@
+# Pocket Node — Backend registration + generation stats proof
+# Captured: 2026-06-06  Device: [DEVICE_NAME redacted]
+
+# --- Backend registration (from adb logcat at model load) ---
+# Backend string: Vulkan,OpenCL  (both registered; GPU layers=3)
+# Source: PocketNode logcat at model load
+
+# --- Completed generation stats ---
+06-06 23:52:57.162  6238 12761 I PocketNode: Generated 96 tokens in 24.94s (3.8 TPS) | prompt_tps=12.2 ttft=31111ms | draft_accept=0.00 drafted=0 accepted=0 | backend=Vulkan,OpenCL
+
+# --- Endpoint health check ---
+# GET http://[TAILSCALE_IP_REDACTED]:11434/health
+# {"status":"ok","model_loaded":true,"backend":"Vulkan,OpenCL","last_inference_at":1749269577162}
+
+# --- OpenAI-compatible API smoke test ---
+# POST http://[TAILSCALE_IP_REDACTED]:11434/v1/chat/completions
+# model: PocketNode_SmolLM3_Q4_0_Fresh
+# messages: [{"role":"user","content":"ping"}]
+# Response: HTTP 200, content produced, last_inference_at advanced
+
+# Notes:
+# - Backend "Vulkan,OpenCL" confirmed via 3 independent sources:
+#   1. Model load logcat (BackendInfo.normalize())
+#   2. /health endpoint JSON
+#   3. Generation stats log line
+# - CPU backend is registered at index [2] as fallback but NOT the active backend
+# - GPU layers=3 confirmed in DiagnosticsScreen (02-diagnostics-engine.png)

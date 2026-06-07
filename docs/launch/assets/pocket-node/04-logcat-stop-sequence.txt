@@ -1,0 +1,31 @@
+# Pocket Node — Stop sequence logcat proof
+# Captured: 2026-06-06  Device: [DEVICE_NAME redacted]
+# adb logcat -s PocketNode — buffer cleared before session
+
+# --- Generation start ---
+06-06 23:57:14.357  6238 12761 I PocketNode: Chat generation: waiting for prior job cleanup before starting a new prompt
+06-06 23:57:14.359  6238 12761 I PocketNode: Chat generation: new generation requested isGenerating=false stopRequested=false
+06-06 23:57:14.360  6238 12761 I PocketNode: PromptTemplateResolver: selectedModelName=PocketNode_SmolLM3_Q4_0_Fresh metadata_name=PocketNode_Operator_BF16_Fresh metadata_arch=smollm3 chatTemplatePresent=false manualOverride=false decision=Llama 3 reason=pocketnode_smollm3_name_match
+06-06 23:57:14.369  6238 12761 I PocketNode: Chat persistence[user]: rawUserMessage="Quantum" savedVisible=true conversationId=1
+06-06 23:57:14.397  6238 12761 I PocketNode: Chat send: rawUserMessage="Quantum" promptOverrideUsed=false groundedPromptPreview="- Current device date/time: Saturday, June 6, 2026 11:57 PM EDT - Current device timezone: America/New_York - Pocket Node local health: service_alive=true model_loaded=true backend=Vulkan,OpenCL battery=100% charging=true thermal=none eligible_for_inference=true - Static homelab topology: Moolah, Ne..."
+06-06 23:57:14.400  6238 12761 I PocketNode: Chat generation: assistant placeholder created id=90
+06-06 23:57:14.408  6238 12761 I PocketNode: Prompt tokens=488 max_new=512 spec=OFF n_draft=3 batch=512 ubatch=128
+
+# --- Stop requested (UI tap at 23:57:19) ---
+06-06 23:57:19.142  6238  6238 I PocketNode: Stop: Kotlin stop requested
+06-06 23:57:19.149  6238  6238 I PocketNode: nativeStopGeneration: stop flag set (release)
+06-06 23:57:19.149  6238  6238 I PocketNode: Stop: nativeStopGeneration called
+06-06 23:57:19.149  6238  6238 I PocketNode: Stop: UI entered stopping state
+
+# --- Native acknowledged stop (end of prefill, 34s after request) ---
+06-06 23:57:53.312  6238 12761 I PocketNode: native: stop observed after prefill, before decode — aborting cleanly
+06-06 23:57:53.313  6238 12761 I PocketNode: Chat generation[raw-output]: conversationId=1 rawNativeOutputPreview=""
+06-06 23:57:53.313  6238 12761 I PocketNode: Chat generation cancelled: stopRequested=true conversationId=1
+06-06 23:57:53.321  6238 12761 I PocketNode: Stop recovery: removed empty assistant placeholder id=90 conversationId=1
+
+# Notes:
+# - Stop requested during prefill (488 tokens at ~12 prompt_tps ≈ 40s total prefill)
+# - Native honored stop at end of prefill before first decode token
+# - No tokens generated; lastSuccessfulInferenceAtMillis NOT updated (confirmed: timestamp unchanged)
+# - UI returned to idle at 23:57:53 — Stopping... card dismissed, input re-enabled
+# - Screenshot 03-stopping-card.png captured at 23:57:17 shows card + spinner

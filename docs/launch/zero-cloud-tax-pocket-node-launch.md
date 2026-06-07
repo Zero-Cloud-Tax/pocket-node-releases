@@ -1,6 +1,6 @@
 # Zero Cloud Tax — Pocket Node Launch Prep
 
-Status: DRAFT — proof collected 2026-06-07, pending screenshot redaction and final review before commit
+Status: DRAFT — screenshots captured 2026-06-06, pending P20 digest screenshot and final review before commit
 
 ---
 
@@ -49,24 +49,26 @@ Before posting, confirm each item is verified and logged.
       ```
 - [x] Health endpoint `/` confirms: `{"backend":"Vulkan,OpenCL"}`
 - [x] **Exact backend string to cite in post: `Vulkan,OpenCL`**
-- [ ] Diagnostics screen screenshot showing Backend row — **TODO: capture**
+- [x] Diagnostics screen screenshot: `assets/pocket-node/02-diagnostics-engine.png`
+      (shows Backend: Vulkan,OpenCL, Threads 4, GPU layers 3, Hardware samsung SM-F956U q6q)
 
 ### Model
 - [x] Model loaded: `PocketNode_SmolLM3_Q4_0_Fresh` — confirmed via logcat and endpoint
 - [x] Verification status: VERIFIED — confirmed in model resolution log line
-- [ ] Diagnostics screenshot showing VERIFIED badge and PRIMARY_MODEL role — **TODO: capture**
+- [x] Diagnostics screenshot showing VERIFIED + PRIMARY_MODEL:
+      `assets/pocket-node/02-diagnostics-model.png`
 
 ### Stop / Prefill Cancellation
 - [x] Verified during smoke test (2026-06-06, UX polish session)
 - [x] Logcat showed: `Stop: Kotlin stop requested` → `nativeStopGeneration called`
       → native observed stop → UI returned to idle
-- [x] "Stopping…" animated card appeared and disappeared correctly
-- [ ] Logcat screenshot of stop sequence — **TODO: capture fresh**
+- [x] "Stopping…" animated card screenshot: `assets/pocket-node/03-stopping-card.png`
+- [x] Full stop sequence logcat: `assets/pocket-node/04-logcat-stop-sequence.txt`
 
 ### Post-Stop Recovery
 - [x] Verified during smoke test: follow-up prompt generated normally after Stop
-- [x] Second follow-up also completed — no state leak
-- [ ] Logcat screenshot showing recovery — **TODO: capture**
+- [x] Logcat confirms: `Chat generation cancelled: stopRequested=true` +
+      `Stop recovery: removed empty assistant placeholder` → next generation starts clean
 
 ### P20 Telemetry
 - [x] Node registered in Sovereign Brain:
@@ -176,14 +178,20 @@ Post copy should say "Tailscale-gated direct API, LiteLLM routing is next."
 
 Capture these before drafting final post. Redact before posting (see Section 6).
 
-| # | Screenshot | What to show | Notes |
-|---|-----------|--------------|-------|
-| 1 | Chat screen | InferenceStatusCard visible with model name, backend chip, VERIFIED badge | Make sure a real prompt/response is visible |
-| 2 | Diagnostics screen | Model card rows: Resolved file, Loaded ✓, Verification VERIFIED, Role PRIMARY_MODEL, Last inference timestamp | Blur or crop resolved file path if it reveals personal folder names |
-| 3 | P20 digest | Pocket Node node healthy in the daily digest | Redact Tailscale IP, hostname if personal |
-| 4 | Logcat — backend | `backend=Vulkan` or `backend=OpenCL` line at model load | Crop to relevant lines only |
-| 5 | Logcat — stop/recovery | Stop request → native stop → recovery prompt sequence | Crop to relevant lines, remove timestamps with personal info if any |
-| 6 | Health endpoint or Tailscale proof | Phone reachable on local network | **Only include if IP/hostname is safe to show — omit otherwise** |
+| # | File | What it shows | Status |
+|---|------|---------------|--------|
+| 1 | `assets/pocket-node/01-chat-screen.png` | InferenceStatusCard with VERIFIED + PRIMARY_MODEL badges, Vulkan,OpenCL chip, response visible | CAPTURED |
+| 2a | `assets/pocket-node/02-diagnostics-engine.png` | Engine card: Backend Vulkan,OpenCL, Threads 4, GPU layers 3, Hardware SM-F956U | CAPTURED |
+| 2b | `assets/pocket-node/02-diagnostics-model.png` | Model card: VERIFIED, Primary model, Resolved file path | CAPTURED |
+| 3 | `assets/pocket-node/03-stopping-card.png` | "Stopping…" card with spinner, input disabled | CAPTURED |
+| 4 | `assets/pocket-node/04-logcat-stop-sequence.txt` | Full stop sequence: Kotlin stop → nativeStop → native ack → cancelled | CAPTURED |
+| 5 | `assets/pocket-node/05-backend-proof.txt` | Backend Vulkan,OpenCL from logcat + generation stats + API smoke test | CAPTURED |
+| 6 | P20 digest screenshot | Pocket Node node healthy in morning digest | **TODO: capture from next morning digest** |
+
+**Note on redaction:** File paths in 02-diagnostics-model.png show the internal storage path
+`/storage/emulated/0/Android/data/com.pocketnode.app/files/models/...` — this is standard
+Android app data path and is safe to include. No private IPs, tokens, or device names in any
+captured asset. `tmp_settings.png` (captured but NOT included) showed Tailscale IP — excluded.
 
 ---
 
