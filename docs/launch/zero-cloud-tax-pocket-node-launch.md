@@ -214,7 +214,7 @@ actually does and what it doesn't.
 **What it does**
 
 - Loads a GGUF model (SmolLM3 Q4_0, ~1.1B params) directly on the Fold6
-- Uses the Vulkan/OpenCL backend via llama.cpp — not CPU-only
+- Reports `Vulkan,OpenCL` through the app/backend telemetry — not CPU-only
 - Streams tokens to a native Android Compose UI
 - Handles Stop during prefill (not just decode): tapping Stop during the
   prefill phase cancels the native generation call, resets the UI, and lets
