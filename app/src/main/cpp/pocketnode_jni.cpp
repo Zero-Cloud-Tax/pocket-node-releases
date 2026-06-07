@@ -416,7 +416,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         return;
     }
 
-    g_stop_generation.store(false);
+    g_stop_generation.store(false, std::memory_order_release);
     (void)image_embed_ptr; // multimodal stubbed pending mtmd API migration
 
     // Tokenize prompt
@@ -447,7 +447,21 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Allocate batch large enough for prompt processing (chunked) and speculative verify pass
     int batch_cap = std::max((int)batch_size, (int)n_draft + 2);
     llama_batch batch = llama_batch_init(batch_cap, 0, 1);
+
+    // Prefill: check stop flag before and between every chunk so Stop is responsive
+    // even during the long prompt-ingestion phase (before any tokens are emitted).
+    if (g_stop_generation.load(std::memory_order_acquire)) {
+        LOGI("native: stop observed before prefill — aborting cleanly");
+        llama_batch_free(batch);
+        return;
+    }
     for (int i = 0; i < n_tokens; i += batch_size) {
+        if (g_stop_generation.load(std::memory_order_acquire)) {
+            LOGI("native: stop observed during prefill chunk %d — aborting cleanly",
+                 i / (int)batch_size);
+            llama_batch_free(batch);
+            return;
+        }
         int n_eval = std::min((int)batch_size, n_tokens - i);
         batch_clear(batch);
         for (int j = 0; j < n_eval; j++) {
@@ -515,6 +529,14 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         llama_batch dp = llama_batch_init(batch_size, 0, 1);
         bool draft_ok = true;
         for (int i = 0; i < n_tokens; i += batch_size) {
+            if (g_stop_generation.load(std::memory_order_acquire)) {
+                LOGI("native: stop observed during draft prefill chunk %d — aborting cleanly",
+                     i / (int)batch_size);
+                llama_batch_free(dp);
+                llama_sampler_free(smpl);
+                llama_batch_free(batch);
+                return;
+            }
             int n_eval = std::min((int)batch_size, n_tokens - i);
             batch_clear(dp);
             for (int j = 0; j < n_eval; j++) {
@@ -534,12 +556,20 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     // Sample first token from target (after prompt logits at last batch position)
     llama_token current_token = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
+    // Check stop between prefill completion and decode start
+    if (g_stop_generation.load(std::memory_order_acquire)) {
+        LOGI("native: stop observed after prefill, before decode — aborting cleanly");
+        llama_sampler_free(smpl);
+        llama_batch_free(batch);
+        return;
+    }
+
     if (!use_speculative) {
         // ── Standard autoregressive loop ─────────────────────────────────────
         // Positions: prompt occupied [0, n_tokens-1]; decode starts at n_tokens
         int n_pos = n_tokens;
 
-        while (n_decode < max_tokens && !g_stop_generation.load()) {
+        while (n_decode < max_tokens && !g_stop_generation.load(std::memory_order_acquire)) {
             if (!emit_token(current_token)) break;
             n_decode++;
 
@@ -572,7 +602,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         int kv_head = n_tokens;
         llama_batch db = llama_batch_init(1, 0, 1);
 
-        while (n_decode < max_tokens && !g_stop_generation.load()) {
+        while (n_decode < max_tokens && !g_stop_generation.load(std::memory_order_acquire)) {
 
             // ── 1. Draft phase ────────────────────────────────────────────
             // Feed current_token to draft at kv_head, then auto-regressively
@@ -631,7 +661,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
             llama_token next_token = 0;
 
             for (int i = 0; i < nd && n_decode < max_tokens
-                                   && !g_stop_generation.load(); i++) {
+                                   && !g_stop_generation.load(std::memory_order_acquire); i++) {
                 llama_token target_pred = llama_sampler_sample(smpl, ctx, i);
 
                 if (target_pred == draft_tokens[i]) {
@@ -720,8 +750,8 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeStopGeneration(
         JNIEnv * /* env */, jobject /* this */, jlong /* ctx_ptr */) {
-    g_stop_generation.store(true);
-    LOGI("Generation stop requested");
+    g_stop_generation.store(true, std::memory_order_release);
+    LOGI("nativeStopGeneration: stop flag set (release)");
 }
 
 JNIEXPORT void JNICALL

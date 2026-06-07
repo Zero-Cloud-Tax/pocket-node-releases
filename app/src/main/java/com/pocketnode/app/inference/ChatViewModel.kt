@@ -8,16 +8,23 @@ import android.util.Log
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import com.pocketnode.app.data.model.KnowledgeChunk
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pocketnode.app.InferenceSession
 import com.pocketnode.app.MainApplication
+import com.pocketnode.app.data.AppDatabase
 import com.pocketnode.app.data.ChatRepository
+import com.pocketnode.app.data.HashUtils
+import com.pocketnode.app.data.VerificationStatus
 import com.pocketnode.app.data.model.ChatMessage
+import com.pocketnode.app.data.model.KnowledgeChunk
+import com.pocketnode.app.data.model.LocalModel
+import com.pocketnode.app.data.model.ModelRole
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -26,6 +33,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
+import java.time.Clock
 
 data class InferenceStats(
     val tps: Float,
@@ -52,10 +61,14 @@ sealed class BenchmarkState {
 }
 
 class ChatViewModel(
-    private val inference: LlamaInference,
+    private val inference: InferenceEngine,
     private val repository: ChatRepository,
     private val app: MainApplication,
-    private val defaultConversationId: Long = DEFAULT_CONVERSATION_ID
+    private val defaultConversationId: Long = DEFAULT_CONVERSATION_ID,
+    private val groundingClock: Clock = Clock.systemDefaultZone(),
+    private val healthSummaryOverride: (() -> String)? = null,
+    private val resolveModelRecordOverride: (suspend (String) -> LocalModel?)? = null,
+    private val availableMemoryBytesOverride: (() -> Long)? = null
 ) : ViewModel() {
 
     companion object {
@@ -83,9 +96,13 @@ class ChatViewModel(
     private var activeConversationId = defaultConversationId
     private var generatingConversationId: Long? = null
     private var messagesJob: Job? = null
+    private var generationJob: Job? = null
+    @Volatile
+    private var stopRequested = false
     private val nativeSessionMutex = Mutex()
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
+    private var loadedModelSelection: ResolvedModelSelection? = null
 
     val messages = mutableStateListOf<ChatMessage>()
     val currentConversationId = mutableStateOf(defaultConversationId)
@@ -241,12 +258,24 @@ class ChatViewModel(
             return
         }
 
-        Log.i(
-            "PocketNode",
+        logInfo(
             "Model load config: path=$modelPath ctx=$contextSize threads=$threadCount gpu_layers=$nGpuLayers speculative=false"
         )
 
         viewModelScope.launch(Dispatchers.IO) {
+            val selectedModel = resolveModelRecord(modelPath)
+            val selectedIdentity = resolveSelection(modelPath, selectedModel)
+            logSelectedModelResolution("preload", selectedIdentity)
+
+            validatePrimaryModelSelection(selectedIdentity)?.let { error ->
+                withContext(Dispatchers.Main) {
+                    modelError.value = error
+                    isModelReady.value = false
+                    modelName.value = selectedIdentity.selectedModelName
+                }
+                return@launch
+            }
+
             // Resolve content:// URI → /proc/self/fd/<N>, or use the path directly
             val isContentUri = modelPath.startsWith("content://")
             val (effectivePath, newFd) = if (isContentUri) {
@@ -271,12 +300,7 @@ class ChatViewModel(
                 Pair(modelPath, -1)
             }
 
-            val displayName = if (isContentUri) {
-                DocumentFile.fromSingleUri(app, Uri.parse(modelPath))?.name
-                    ?.removeSuffix(".gguf") ?: "Model"
-            } else {
-                File(modelPath).nameWithoutExtension
-            }
+            val displayName = selectedIdentity.selectedModelName
 
             withContext(Dispatchers.Main) {
                 isLoadingModel.value = true
@@ -286,12 +310,15 @@ class ChatViewModel(
             }
 
             // RAM Validation
-            val activityManager = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-            val memInfo = android.app.ActivityManager.MemoryInfo()
-            activityManager.getMemoryInfo(memInfo)
+            val availableMemoryBytes = availableMemoryBytesOverride?.invoke() ?: run {
+                val activityManager = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                val memInfo = android.app.ActivityManager.MemoryInfo()
+                activityManager.getMemoryInfo(memInfo)
+                memInfo.availMem
+            }
             
             // If less than 800MB available, warn and prevent load
-            if (memInfo.availMem < 800L * 1024 * 1024) {
+            if (availableMemoryBytes < 800L * 1024 * 1024) {
                 if (newFd >= 0) inference.nativeCloseFd(newFd)
                 withContext(Dispatchers.Main) {
                     modelError.value = "Not enough RAM available. Please close other apps or use a smaller quantization model."
@@ -338,16 +365,21 @@ class ChatViewModel(
                     loadedContextSize = contextSize
                     loadedThreadCount = threadCount
                     loadedGpuLayers = nGpuLayers
+                    loadedModelSelection = selectedIdentity
                     
                     val metaArray = inference.nativeGetModelMetadata(contextPtr)
                     if (metaArray != null && metaArray.size >= 5) {
-                        mainModelMetadata.value = ModelMetadata(
+                        val metadata = ModelMetadata(
                             architecture = metaArray[0],
                             name = metaArray[1],
                             tokenizerModel = metaArray[2],
                             vocabSize = metaArray[3].toIntOrNull() ?: 0,
                             chatTemplate = metaArray[4]
                         )
+                        validateLoadedModelMetadata(selectedIdentity, metadata)?.let { mismatch ->
+                            throw IllegalStateException(mismatch)
+                        }
+                        mainModelMetadata.value = metadata
                     } else {
                         mainModelMetadata.value = null
                     }
@@ -363,6 +395,9 @@ class ChatViewModel(
                         "CPU"
                     }
                 }
+                logInfo(
+                    "Model resolution[loaded]: selectedModelId=${selectedIdentity.selectedModelId} selectedModelName=${selectedIdentity.selectedModelName} verificationStatus=${selectedIdentity.verificationStatus ?: "unknown"} backendLabel=${backendName.value} contextPtrState=${if (contextPtr != 0L) "ready" else "null"}"
+                )
             } catch (e: OutOfMemoryError) {
                 cleanupFailedLoad(nextModelPtr, nextContextPtr, newFd)
                 withContext(Dispatchers.Main) {
@@ -372,6 +407,7 @@ class ChatViewModel(
                 cleanupFailedLoad(nextModelPtr, nextContextPtr, newFd)
                 withContext(Dispatchers.Main) {
                     modelError.value = e.message ?: "Failed to load the selected model."
+                    isModelReady.value = false
                 }
             } finally {
                 withContext(Dispatchers.Main) {
@@ -533,10 +569,216 @@ class ChatViewModel(
         if (nextModelPtr != 0L) inference.nativeFreeModel(nextModelPtr)
         // Close the new FD that failed — don't close rawFd (still owned by previous model)
         if (newFd >= 0 && newFd != rawFd) inference.nativeCloseFd(newFd)
+        // Zero class fields so sendMessageInternal's contextPtr == 0L guard fires correctly.
+        // If validation threw after the class fields were already assigned (post-metadata check),
+        // the fields still hold the now-freed pointer values without this reset.
+        contextPtr = 0L
+        modelPtr = 0L
         loadedModelPath = null
         loadedContextSize = 0
         loadedThreadCount = 0
         loadedGpuLayers = 0
+        loadedModelSelection = null
+        mainModelMetadata.value = null
+        app.activeSession = null
+    }
+
+    private suspend fun resolveModelRecord(modelPath: String): LocalModel? {
+        resolveModelRecordOverride?.let { return it(modelPath) }
+        return runCatching {
+            AppDatabase.getInstance(app).modelDao().getModelByPath(modelPath)
+        }.getOrNull()
+    }
+
+    private fun resolveSelection(modelPath: String, model: LocalModel?): ResolvedModelSelection {
+        val file = if (!modelPath.startsWith("content://")) File(modelPath) else null
+        val fileName = when {
+            model != null -> File(model.path).name
+            file != null -> file.name
+            else -> modelPath.substringAfterLast('/')
+        }
+        val sizeBytes = when {
+            model != null && model.sizeBytes > 0L -> model.sizeBytes
+            file != null && file.exists() -> file.length()
+            else -> 0L
+        }
+        val shaPrefix = when {
+            model?.sha256 != null -> model.sha256.take(12)
+            file != null && file.exists() && file.length() in 10_000_000L..150_000_000L ->
+                runCatching { sha256Prefix(file) }.getOrNull()
+            else -> null
+        }
+        return ResolvedModelSelection(
+            selectedModelId = model?.name ?: fileName.removeSuffix(".gguf"),
+            selectedModelName = model?.name ?: fileName.removeSuffix(".gguf"),
+            selectedModelDbId = model?.id,
+            resolvedModelPath = model?.path ?: modelPath,
+            resolvedFileName = fileName,
+            fileSizeBytes = sizeBytes,
+            sha256Prefix = shaPrefix,
+            isDraft = model?.role == ModelRole.DRAFT.name,
+            isPrimary = model?.role != ModelRole.DRAFT.name,
+            verificationStatus = model?.verificationStatus
+        )
+    }
+
+    private fun validatePrimaryModelSelection(selection: ResolvedModelSelection): String? {
+        if (selection.isDraft) {
+            logInfo(
+                "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus ?: "unknown"} reason=draft_selected_for_primary"
+            )
+            return "Draft model selected for primary chat: ${selection.selectedModelName}. Choose a main model from Chat Models."
+        }
+        if (selection.verificationStatus == VerificationStatus.FAILED && selection.isPrimary) {
+            logInfo(
+                "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus} reason=failed_verification"
+            )
+            return "Primary model failed integrity verification: ${selection.selectedModelName}. Re-download or re-import the correct GGUF before chatting."
+        }
+        val knownOperatorHash = HashUtils.KNOWN_HASHES[selection.selectedModelName]
+        if (knownOperatorHash != null && selection.sha256Prefix != null) {
+            val expectedPrefix = knownOperatorHash.take(selection.sha256Prefix.length)
+            if (!selection.sha256Prefix.equals(expectedPrefix, ignoreCase = true)) {
+                logInfo(
+                    "Model resolution[blocked]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus ?: "unknown"} reason=sha_prefix_mismatch"
+                )
+                return "Primary model identity mismatch: ${selection.selectedModelName} does not match the expected PocketNode Operator artifact."
+            }
+        }
+        return null
+    }
+
+    private fun validateLoadedModelMetadata(
+        selection: ResolvedModelSelection,
+        metadata: ModelMetadata
+    ): String? {
+        logInfo(
+            "Post-load metadata: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} verificationStatus=${selection.verificationStatus ?: "unknown"} metadata_name=${metadata.name} metadata_arch=${metadata.architecture} metadata_chatTemplate=${metadata.chatTemplate.take(120).replace("\n", "\\n")}"
+        )
+        if (selection.isDraft) {
+            return "Draft model was loaded into the primary chat slot: ${selection.selectedModelName}"
+        }
+
+        val metadataName = metadata.name.lowercase()
+        val selectedName = selection.selectedModelName.lowercase()
+        val selectedLooksLikeDraft =
+            selectedName.contains("draft") ||
+                selection.resolvedFileName.lowercase().contains("draft")
+        val explicitDraftMetadata =
+            metadataName.contains("draft") ||
+                metadataName.contains("smollm2 135m") ||
+                metadataName.contains("smollm2-135m")
+
+        if (explicitDraftMetadata && !selectedLooksLikeDraft) {
+            logInfo(
+                "Post-load metadata validation: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} result=blocked_draft_signature"
+            )
+            return "Loaded model metadata does not match the selected primary model. Selected ${selection.selectedModelName}, but native metadata reports ${metadata.name}."
+        }
+        logInfo(
+            "Post-load metadata validation: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} result=pass"
+        )
+        return null
+    }
+
+    private fun logSelectedModelResolution(stage: String, selection: ResolvedModelSelection) {
+        logInfo(
+            "Model resolution[$stage]: selectedModelId=${selection.selectedModelId} selectedModelName=${selection.selectedModelName} selectedModelDbId=${selection.selectedModelDbId ?: "unknown"} resolvedModelPath=${selection.resolvedModelPath} resolvedFileName=${selection.resolvedFileName} fileSizeBytes=${selection.fileSizeBytes} sha256Prefix=${selection.sha256Prefix ?: "unknown"} isDraft=${selection.isDraft} isPrimary=${selection.isPrimary} verificationStatus=${selection.verificationStatus ?: "unknown"}"
+        )
+    }
+
+    private fun sha256Prefix(file: File, prefixChars: Int = 12): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(64 * 1024)
+        file.inputStream().use { input ->
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }.take(prefixChars)
+    }
+
+    private data class ResolvedModelSelection(
+        val selectedModelId: String,
+        val selectedModelName: String,
+        val selectedModelDbId: String?,
+        val resolvedModelPath: String,
+        val resolvedFileName: String,
+        val fileSizeBytes: Long,
+        val sha256Prefix: String?,
+        val isDraft: Boolean,
+        val isPrimary: Boolean,
+        val verificationStatus: String?
+    )
+
+    private fun logInfo(message: String) {
+        runCatching { Log.i("PocketNode", message) }
+    }
+
+    private fun logTemplateResolution(
+        requestedTemplate: PromptTemplate,
+        effectiveTemplate: PromptTemplate,
+        resolverResult: TemplateResolution,
+        isManualOverride: Boolean
+    ) {
+        val meta = mainModelMetadata.value
+        val selectedName = loadedModelSelection?.selectedModelName ?: ""
+        val reason = if (isManualOverride) "manual_override_${requestedTemplate.name}" else resolverResult.reason
+        logInfo(
+            "PromptTemplateResolver: selectedModelName=$selectedName" +
+            " metadata_name=${meta?.name ?: "unknown"}" +
+            " metadata_arch=${meta?.architecture ?: "unknown"}" +
+            " chatTemplatePresent=${meta?.chatTemplate?.isNotEmpty() == true}" +
+            " manualOverride=$isManualOverride" +
+            " decision=${effectiveTemplate.name}" +
+            " reason=$reason"
+        )
+    }
+
+    private fun preview(text: String?, maxChars: Int = 300): String {
+        if (text.isNullOrBlank()) return ""
+        val flattened = text.replace(Regex("\\s+"), " ").trim()
+        return if (flattened.length <= maxChars) flattened else flattened.take(maxChars) + "..."
+    }
+
+    private val internalPromptLeakMarkers = listOf(
+        "Grounding facts for this turn:",
+        "Current device date/time:",
+        "Current device timezone:",
+        "Pocket Node local health:",
+        "Policy: Do not invent live node/service status.",
+        "User message:",
+        "<POCKET_NODE_CONTEXT>",
+        "</POCKET_NODE_CONTEXT>",
+        "Do not repeat, quote, or reveal the context block",
+        "Use the following context silently."
+    )
+
+    private data class SanitizedAssistantOutput(
+        val visibleText: String,
+        val leakDetected: Boolean
+    )
+
+    private fun sanitizeAssistantOutput(rawOutput: String, finalPass: Boolean): SanitizedAssistantOutput {
+        val trimmedStart = rawOutput.trimStart()
+        val leakDetected = internalPromptLeakMarkers.any { trimmedStart.startsWith(it) } ||
+            internalPromptLeakMarkers.count { marker ->
+                trimmedStart.take(800).contains(marker)
+            } >= 2
+
+        if (!leakDetected) {
+            return SanitizedAssistantOutput(rawOutput, leakDetected = false)
+        }
+
+        return if (finalPass) {
+            SanitizedAssistantOutput(
+                visibleText = "I had an internal prompt-formatting error on that turn. Please resend your message.",
+                leakDetected = true
+            )
+        } else {
+            SanitizedAssistantOutput(visibleText = "", leakDetected = true)
+        }
     }
 
     private fun buildPocketNodeHealthSummary(): String {
@@ -569,7 +811,7 @@ class ChatViewModel(
 
         return buildString {
             append("service_alive=").append(true)
-            append("model_loaded=").append(modelLoaded)
+            append(" model_loaded=").append(modelLoaded)
             append(" backend=").append(backend)
             append(" battery=").append(batteryPercent).append('%')
             append(" charging=").append(charging)
@@ -579,6 +821,24 @@ class ChatViewModel(
                 append(" reason_if_not_eligible=").append(reason)
             }
         }
+    }
+
+    internal fun setLoadedContextForTesting(
+        modelPtr: Long,
+        contextPtr: Long,
+        modelName: String = "Test Model",
+        backend: String = "CPU"
+    ) {
+        this.modelPtr = modelPtr
+        this.contextPtr = contextPtr
+        this.modelName.value = modelName
+        this.backendName.value = backend
+        this.isModelReady.value = true
+        loadedModelPath = "test-model.gguf"
+        loadedContextSize = DEFAULT_CONTEXT_SIZE
+        loadedThreadCount = 4
+        loadedGpuLayers = 0
+        app.activeSession = InferenceSession(contextPtr, modelName)
     }
 
     private fun thermalStatusString(code: Int): String = when (code) {
@@ -611,8 +871,61 @@ class ChatViewModel(
         benchmarkMode: Boolean = false,
         serviceStateSummary: String? = null
     ) {
+        val priorGenerationJob = generationJob
+        generationJob = viewModelScope.launch(Dispatchers.IO) {
+            if (priorGenerationJob != null) {
+                logInfo("Chat generation: waiting for prior job cleanup before starting a new prompt")
+                priorGenerationJob.join()
+            }
+            stopRequested = false
+            logInfo(
+                "Chat generation: new generation requested isGenerating=${isGenerating.value} stopRequested=$stopRequested"
+            )
+            sendMessageInternal(
+                text = text,
+                imageBytes = imageBytes,
+                conversationId = conversationId,
+                clearConversationFirst = clearConversationFirst,
+                temp = temp,
+                topP = topP,
+                topK = topK,
+                maxTokens = maxTokens,
+                systemPrompt = systemPrompt,
+                template = template,
+                speculativeEnabled = speculativeEnabled,
+                nDraft = nDraft,
+                batchSize = batchSize,
+                ubatchSize = ubatchSize,
+                benchmarkMode = benchmarkMode,
+                serviceStateSummary = serviceStateSummary
+            )
+        }
+    }
+
+    internal suspend fun sendMessageInternal(
+        text: String,
+        imageBytes: ByteArray? = null,
+        conversationId: Long = defaultConversationId,
+        clearConversationFirst: Boolean = false,
+        temp: Float = 0.7f,
+        topP: Float = 0.9f,
+        topK: Int = 40,
+        maxTokens: Int = 512,
+        systemPrompt: String = "",
+        template: PromptTemplate = PromptTemplate.ChatML,
+        speculativeEnabled: Boolean = false,
+        nDraft: Int = 5,
+        batchSize: Int = 512,
+        ubatchSize: Int = 128,
+        benchmarkMode: Boolean = false,
+        serviceStateSummary: String? = null
+    ) {
         val trimmedText = text.trim()
-        if (trimmedText.isBlank() || contextPtr == 0L || isGenerating.value) return
+        if (trimmedText.isBlank() || isGenerating.value) return
+        if (contextPtr == 0L) {
+            modelError.value = modelError.value ?: "Primary chat model is not loaded."
+            return
+        }
 
         // Context budget guard — checked on main thread before coroutine launch.
         val chunksForSend = _attachedChunks.toList()
@@ -629,175 +942,226 @@ class ChatViewModel(
         }
         _attachedChunks.clear()
 
-        lastTemplate = template
+        // Resolve effective template: Auto defers to metadata-driven auto-selection; explicit choice is manual override.
+        val resolverResult = PromptTemplateResolver.resolve(mainModelMetadata.value, loadedModelSelection?.selectedModelName ?: "")
+        val isManualOverride = template !is PromptTemplate.Auto
+        val effectiveTemplate = if (isManualOverride) template else resolverResult.template
+        logTemplateResolution(template, effectiveTemplate, resolverResult, isManualOverride)
+
+        lastTemplate = effectiveTemplate
         lastTemp = temp
         lastBatchSize = batchSize
         lastUbatchSize = ubatchSize
 
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                if (clearConversationFirst) {
-                    if (contextPtr != 0L && conversationId == activeConversationId) {
-                        inference.nativeClearCache(contextPtr)
-                    }
-                    repository.clearConversation(conversationId)
+        try {
+            if (clearConversationFirst) {
+                if (contextPtr != 0L && conversationId == activeConversationId) {
+                    inference.nativeClearCache(contextPtr)
                 }
+                repository.clearConversation(conversationId)
+            }
 
-                repository.saveMessage(
-                    ChatMessage(conversationId = conversationId, role = "user", content = trimmedText)
-                )
+            repository.saveMessage(
+                ChatMessage(conversationId = conversationId, role = "user", content = trimmedText)
+            )
+            logInfo(
+                "Chat persistence[user]: rawUserMessage=\"${preview(trimmedText)}\" savedVisible=true conversationId=$conversationId"
+            )
 
-                withContext(Dispatchers.Main) {
-                    generatingConversationId = conversationId
-                    isGenerating.value = true
-                    currentAssistantMessage.value = ""
-                    syncVisibleGenerationState()
-                    modelError.value = null
-                }
+            withContext(Dispatchers.Main) {
+                generatingConversationId = conversationId
+                isGenerating.value = true
+                currentAssistantMessage.value = ""
+                syncVisibleGenerationState()
+                modelError.value = null
+            }
 
-                val conversationHistory = repository.getMessagesSnapshot(conversationId)
-                val knowledgeBlock = buildKnowledgeBlock(chunksForSend)
-                val groundedSystemPrompt = PromptGrounding.buildGroundedSystemPrompt(
-                    baseSystemPrompt = systemPrompt,
-                    deviceStamp = PromptGrounding.currentDeviceStamp(),
-                    pocketNodeHealthSummary = buildPocketNodeHealthSummary(),
-                    serviceStateSummary = serviceStateSummary
-                )
-                val fullPrompt = repository.buildContextString(
-                    messages = conversationHistory,
-                    systemPrompt = groundedSystemPrompt,
-                    template = template,
-                    knowledgeContext = knowledgeBlock
-                )
+            val conversationHistory = repository.getMessagesSnapshot(conversationId)
+            val knowledgeBlock = buildKnowledgeBlock(chunksForSend)
+            val groundedTurn = PromptGrounding.buildGroundedTurnPrompt(
+                baseSystemPrompt = systemPrompt,
+                rawUserPrompt = trimmedText,
+                deviceTime = PromptGrounding.currentDeviceDateTime(groundingClock),
+                pocketNodeHealthSummary = healthSummaryOverride?.invoke() ?: buildPocketNodeHealthSummary(),
+                serviceStateSummary = serviceStateSummary
+            )
+            val fullPrompt = repository.buildContextString(
+                messages = conversationHistory,
+                systemPrompt = groundedTurn.systemPrompt,
+                template = effectiveTemplate,
+                knowledgeContext = knowledgeBlock,
+                promptOverride = groundedTurn.userPrompt
+            )
+            logPromptGrounding(trimmedText, groundedTurn, fullPrompt)
+            logInfo(
+                "Chat send: rawUserMessage=\"${preview(trimmedText)}\" promptOverrideUsed=${groundedTurn.userPrompt != trimmedText} groundedPromptPreview=\"${preview(groundedTurn.groundedContextPreview)}\""
+            )
 
-                // Save an empty assistant message first to get its ID
-                val assistantMsgId = repository.saveMessage(
-                    ChatMessage(conversationId = conversationId, role = "assistant", content = "")
-                )
-                
-                var partialMessage = ""
-                var lastUiUpdateTime = 0L
-                var lastDbSaveTime = 0L
+            // Save an empty assistant message first to get its ID
+            val assistantMsgId = repository.saveMessage(
+                ChatMessage(conversationId = conversationId, role = "assistant", content = "")
+            )
+            logInfo("Chat generation: assistant placeholder created id=$assistantMsgId")
 
-                val callback = object : LlamaCallback {
-                    override fun onToken(token: String) {
-                        partialMessage += token
-                        val now = System.currentTimeMillis()
+            var partialMessage = ""
+            var lastUiUpdateTime = 0L
+            var lastDbSaveTime = 0L
 
-                        // Throttle UI updates to reduce recomposition and rendering pressure.
-                        if (now - lastUiUpdateTime > 150) {
-                            lastUiUpdateTime = now
-                            viewModelScope.launch(Dispatchers.Main) {
-                                currentAssistantMessage.value = partialMessage
-                                syncVisibleGenerationState()
-                            }
-                        }
+            val callback = object : LlamaCallback {
+                override fun onToken(token: String) {
+                    partialMessage += token
+                    val sanitized = sanitizeAssistantOutput(partialMessage, finalPass = false)
+                    val now = System.currentTimeMillis()
 
-                        // Periodically persist to DB every 2000ms
-                        if (now - lastDbSaveTime > 2000) {
-                            lastDbSaveTime = now
-                            viewModelScope.launch(Dispatchers.IO) {
-                                repository.updateMessage(
-                                    ChatMessage(id = assistantMsgId, conversationId = conversationId, role = "assistant", content = partialMessage)
-                                )
-                            }
-                        }
-                    }
-
-                    override fun onStats(
-                        tps: Float,
-                        ttftMs: Long,
-                        draftAcceptRate: Float,
-                        totalTokens: Int,
-                        promptEvalTps: Float,
-                        backendName: String,
-                        nDrafted: Int,
-                        nAccepted: Int,
-                        nCtx: Int,
-                        nPast: Int
-                    ) {
-                        val actualBackend = BackendInfo.normalize(backendName)
-                        val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted, nCtx, nPast)
-                        if (benchmarkMode && com.pocketnode.app.BuildConfig.DEBUG) {
-                            Log.d("PocketNode-Bench",
-                                "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s template=%s reqGpuLayers=%d threads=%d"
-                                    .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, template.name, loadedGpuLayers, loadedThreadCount))
-                            Log.d("PocketNode-Bench", "Full prompt sent to model:\n$fullPrompt")
-                        }
+                    // Throttle UI updates to reduce recomposition and rendering pressure.
+                    if (now - lastUiUpdateTime > 150) {
+                        lastUiUpdateTime = now
                         viewModelScope.launch(Dispatchers.Main) {
-                            this@ChatViewModel.backendName.value = actualBackend
-                            lastInferenceStats.value = stats
+                            currentAssistantMessage.value = sanitized.visibleText
+                            syncVisibleGenerationState()
+                        }
+                    }
+
+                    // Periodically persist to DB every 2000ms
+                    if (now - lastDbSaveTime > 2000) {
+                        lastDbSaveTime = now
+                        viewModelScope.launch(Dispatchers.IO) {
+                            repository.updateMessage(
+                                ChatMessage(
+                                    id = assistantMsgId,
+                                    conversationId = conversationId,
+                                    role = "assistant",
+                                    content = sanitized.visibleText
+                                )
+                            )
                         }
                     }
                 }
 
-                var clipCtxPtr = 0L
-                var imageEmbedPtr = 0L
-
-                try {
-                    nativeSessionMutex.withLock {
-                        if (contextPtr == 0L) {
-                            throw IllegalStateException("Model context is no longer available.")
-                        }
-
-                        if (imageBytes != null) {
-                            val mmprojFile = resolveVisionProjectorFile()
-                                ?: throw IllegalStateException(
-                                    "Missing vision projector file. Download or import mmproj-model-f16.gguf from Model Hub before using Ask Image."
-                                )
-
-                            clipCtxPtr = inference.nativeLoadMmproj(mmprojFile.absolutePath)
-                            if (clipCtxPtr == 0L) {
-                                throw IllegalStateException(
-                                    inference.nativeGetLastError().ifBlank { "Failed to load the vision projector model." }
-                                )
-                            }
-
-                            imageEmbedPtr = inference.nativeMakeImageEmbed(clipCtxPtr, imageBytes)
-                            if (imageEmbedPtr == 0L) {
-                                throw IllegalStateException(
-                                    inference.nativeGetLastError().ifBlank { "Failed to encode the selected image for this model." }
-                                )
-                            }
-                        }
-
-                        val effectiveDraftCtx = if (speculativeEnabled && draftContextPtr != 0L)
-                            draftContextPtr else 0L
-
-                        inference.nativeGenerate(
-                            contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f,
-                            effectiveDraftCtx, nDraft, batchSize, ubatchSize, callback
-                        )
+                override fun onStats(
+                    tps: Float,
+                    ttftMs: Long,
+                    draftAcceptRate: Float,
+                    totalTokens: Int,
+                    promptEvalTps: Float,
+                    backendName: String,
+                    nDrafted: Int,
+                    nAccepted: Int,
+                    nCtx: Int,
+                    nPast: Int
+                ) {
+                    val actualBackend = BackendInfo.normalize(backendName)
+                    val stats = InferenceStats(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, effectiveTemplate.name, loadedGpuLayers, loadedThreadCount, nDrafted, nAccepted, nCtx, nPast)
+                    if (benchmarkMode && com.pocketnode.app.BuildConfig.DEBUG) {
+                        Log.d("PocketNode-Bench",
+                            "tps=%.1f ttft=%dms draft_accept=%.2f tokens=%d prompt_tps=%.1f backend=%s template=%s reqGpuLayers=%d threads=%d"
+                                .format(tps, ttftMs, draftAcceptRate, totalTokens, promptEvalTps, actualBackend, effectiveTemplate.name, loadedGpuLayers, loadedThreadCount))
+                        Log.d("PocketNode-Bench", "Full prompt sent to model:\n$fullPrompt")
                     }
-                } finally {
-                    if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
-                    if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
+                    viewModelScope.launch(Dispatchers.Main) {
+                        this@ChatViewModel.backendName.value = actualBackend
+                        lastInferenceStats.value = stats
+                    }
                 }
+            }
 
-                // Final save to DB
-                repository.updateMessage(
-                    ChatMessage(
-                        id = assistantMsgId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = partialMessage
+            var clipCtxPtr = 0L
+            var imageEmbedPtr = 0L
+
+            try {
+                nativeSessionMutex.withLock {
+                    if (contextPtr == 0L) {
+                        throw IllegalStateException("Model context is no longer available.")
+                    }
+
+                    if (imageBytes != null) {
+                        val mmprojFile = resolveVisionProjectorFile()
+                            ?: throw IllegalStateException(
+                                "Missing vision projector file. Download or import mmproj-model-f16.gguf from Model Hub before using Ask Image."
+                            )
+
+                        clipCtxPtr = inference.nativeLoadMmproj(mmprojFile.absolutePath)
+                        if (clipCtxPtr == 0L) {
+                            throw IllegalStateException(
+                                inference.nativeGetLastError().ifBlank { "Failed to load the vision projector model." }
+                            )
+                        }
+
+                        imageEmbedPtr = inference.nativeMakeImageEmbed(clipCtxPtr, imageBytes)
+                        if (imageEmbedPtr == 0L) {
+                            throw IllegalStateException(
+                                inference.nativeGetLastError().ifBlank { "Failed to encode the selected image for this model." }
+                            )
+                        }
+                    }
+
+                    val effectiveDraftCtx = if (speculativeEnabled && draftContextPtr != 0L)
+                        draftContextPtr else 0L
+
+                    inference.nativeGenerate(
+                        contextPtr, fullPrompt, imageEmbedPtr, maxTokens, temp, topP, topK, 1.1f,
+                        effectiveDraftCtx, nDraft, batchSize, ubatchSize, callback
                     )
-                )
-            } catch (e: OutOfMemoryError) {
-                withContext(Dispatchers.Main) {
-                    modelError.value = "Out of memory during generation — try reducing context size."
-                }
-            } catch (e: Throwable) {
-                withContext(Dispatchers.Main) {
-                    modelError.value = e.message ?: "Generation failed."
                 }
             } finally {
-                withContext(Dispatchers.Main) {
-                    generatingConversationId = null
-                    currentAssistantMessage.value = ""
-                    isGenerating.value = false
-                    syncVisibleGenerationState()
+                if (imageEmbedPtr != 0L) inference.nativeFreeImageEmbed(imageEmbedPtr)
+                if (clipCtxPtr != 0L) inference.nativeFreeMmproj(clipCtxPtr)
+            }
+
+            logInfo(
+                "Chat generation[raw-output]: conversationId=$conversationId rawNativeOutputPreview=\"${preview(partialMessage)}\""
+            )
+            val finalAssistantOutput = sanitizeAssistantOutput(partialMessage, finalPass = true)
+
+            // Final save to DB
+            repository.updateMessage(
+                ChatMessage(
+                    id = assistantMsgId,
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = finalAssistantOutput.visibleText
+                )
+            )
+            logInfo(
+                "Chat persistence[assistant]: conversationId=$conversationId finalAssistantPreview=\"${preview(finalAssistantOutput.visibleText)}\" savedVisible=true"
+            )
+        } catch (e: CancellationException) {
+            logInfo(
+                "Chat generation cancelled: stopRequested=$stopRequested conversationId=$conversationId"
+            )
+            throw e
+        } catch (e: OutOfMemoryError) {
+            withContext(Dispatchers.Main) {
+                modelError.value = "Out of memory during generation — try reducing context size."
+            }
+        } catch (e: Throwable) {
+            withContext(Dispatchers.Main) {
+                modelError.value = e.message ?: "Generation failed."
+            }
+        } finally {
+            // NonCancellable ensures this cleanup block runs even if generationJob was cancelled
+            // via stopGeneration(). Without it, withContext(Dispatchers.Main) would throw
+            // CancellationException and generatingConversationId would never be cleared.
+            withContext(NonCancellable + Dispatchers.IO) {
+                if (stopRequested) {
+                    val abortedAssistant = repository
+                        .getMessagesSnapshot(conversationId)
+                        .lastOrNull { it.role == "assistant" && it.content.isBlank() }
+                    if (abortedAssistant != null) {
+                        repository.deleteMessage(abortedAssistant.id)
+                        logInfo(
+                            "Stop recovery: removed empty assistant placeholder id=${abortedAssistant.id} conversationId=$conversationId"
+                        )
+                    } else {
+                        logInfo("Stop recovery: no empty assistant placeholder found for conversationId=$conversationId")
+                    }
                 }
+            }
+            withContext(NonCancellable + Dispatchers.Main) {
+                generatingConversationId = null
+                currentAssistantMessage.value = ""
+                isGenerating.value = false
+                syncVisibleGenerationState()
             }
         }
     }
@@ -809,11 +1173,61 @@ class ChatViewModel(
     }
 
     fun stopGeneration() {
-        if (contextPtr != 0L) inference.nativeStopGeneration(contextPtr)
+        logInfo("Stop: Kotlin stop requested")
+        stopRequested = true
+        // Set the native abort flag first — before any coroutine cancellation —
+        // so the in-flight nativeGenerate call sees the flag at its next check point.
+        if (contextPtr != 0L) {
+            inference.nativeStopGeneration(contextPtr)
+            logInfo("Stop: nativeStopGeneration called")
+        }
+        // Reset UI immediately so the send button re-enables before native returns.
+        isGenerating.value = false
+        visibleIsGenerating.value = false
+        currentAssistantMessage.value = ""
+        visibleAssistantMessage.value = ""
+        syncVisibleGenerationState()
+        // Cancel the coroutine so post-generation DB saves are skipped for aborted output.
+        generationJob?.cancel()
+        generationJob = null
+        logInfo("Stop: UI returned to idle after stop")
     }
 
     fun dismissError() {
         modelError.value = null
+    }
+
+    private fun logPromptGrounding(
+        rawUserPrompt: String,
+        groundedTurn: GroundedTurnPrompt,
+        fullPrompt: String
+    ) {
+        val rawTokenCount = safeTokenCount(rawUserPrompt)
+        val fullPromptTokenCount = safeTokenCount(fullPrompt)
+        runCatching {
+            Log.i(
+                "PromptGrounding",
+                buildString {
+                    append("Applied before native generation")
+                    append(" raw_chars=").append(rawUserPrompt.length)
+                    append(" raw_tokens=").append(rawTokenCount ?: "unavailable")
+                    append(" grounded_chars=").append(groundedTurn.groundedContextPreview.length)
+                    append(" full_prompt_chars=").append(fullPrompt.length)
+                    append(" full_prompt_tokens=").append(fullPromptTokenCount ?: "unavailable")
+                    append(" service_state_present=").append(groundedTurn.serviceStatePresent)
+                    append(" sections=").append(groundedTurn.sectionFlags.joinToString(","))
+                }
+            )
+        }
+    }
+
+    private fun safeTokenCount(text: String): Int? {
+        if (modelPtr == 0L) return null
+        return try {
+            inference.nativeGetTokenCount(modelPtr, text)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     fun clearChat(conversationId: Long) {

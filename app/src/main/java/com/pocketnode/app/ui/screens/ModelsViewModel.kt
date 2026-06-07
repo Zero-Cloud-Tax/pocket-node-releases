@@ -4,11 +4,14 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pocketnode.app.MainApplication
 import com.pocketnode.app.data.HashUtils
+import com.pocketnode.app.data.ImportIntent
+import com.pocketnode.app.data.ModelArtifactManager
 import com.pocketnode.app.data.ModelManager
 import com.pocketnode.app.data.StorageStats
 import com.pocketnode.app.data.StorageUtils
@@ -21,7 +24,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -29,7 +31,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -73,6 +74,9 @@ class ModelsViewModel(
     private val _importError = MutableStateFlow<String?>(null)
     val importError: StateFlow<String?> = _importError.asStateFlow()
 
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+
     private val activeDownloadIds = mutableMapOf<Long, String>() // downloadId -> modelName
 
     private val _operatorDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
@@ -80,6 +84,7 @@ class ModelsViewModel(
     private var operatorDownloadJob: Job? = null
 
     fun clearImportError() { _importError.value = null }
+    fun clearStatusMessage() { _statusMessage.value = null }
 
     fun refreshStorageStats() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -91,7 +96,7 @@ class ModelsViewModel(
 
     fun downloadOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
         if (operatorDownloadJob?.isActive == true) return
-        val modelDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+        val modelDir = ModelArtifactManager.modelsDir(app)
         if (File(modelDir, spec.filename).exists()) {
             _operatorDownloadState.value = DownloadState.FileExists
             return
@@ -102,29 +107,58 @@ class ModelsViewModel(
     fun useExistingOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             _operatorDownloadState.value = DownloadState.Verifying
-            val finalFile = File(File(app.getExternalFilesDir(null), "models"), spec.filename)
-            if (!finalFile.exists()) { _operatorDownloadState.value = DownloadState.Idle; return@launch }
-            val existing = models.value.firstOrNull { it.path == finalFile.absolutePath }
-            val model = existing ?: LocalModel(
-                id = UUID.randomUUID().toString(),
-                name = finalFile.nameWithoutExtension,
-                path = finalFile.absolutePath,
-                contextLength = 4096,
-                sizeBytes = finalFile.length(),
-                lastModified = finalFile.lastModified(),
-                verificationStatus = VerificationStatus.NOT_CHECKED
-            ).also { modelManager.addModel(it) }
-            hashModelIfNeeded(model)
-            _storageStats.value = StorageUtils.compute(app)
-            _operatorDownloadState.value = DownloadState.Complete(finalFile.absolutePath)
-            onComplete?.invoke()
+            try {
+                val finalFile = File(ModelArtifactManager.modelsDir(app), spec.filename)
+                if (!finalFile.exists()) { _operatorDownloadState.value = DownloadState.Idle; return@launch }
+                val existing = models.value.firstOrNull { it.path == finalFile.absolutePath }
+                val intent = ImportIntent(
+                    displayName = finalFile.nameWithoutExtension,
+                    intendedRole = ModelRole.MAIN.name,
+                    expectedSha256 = spec.expectedSha256
+                )
+                val importedArtifact = ModelArtifactManager.importFromFile(finalFile, finalFile, intent)
+                val modelId = existing?.id ?: UUID.randomUUID().toString()
+                modelManager.addModel(
+                    LocalModel(
+                        id = modelId,
+                        name = finalFile.nameWithoutExtension,
+                        path = importedArtifact.file.absolutePath,
+                        contextLength = existing?.contextLength ?: 4096,
+                        role = ModelRole.MAIN.name,
+                        family = importedArtifact.family ?: existing?.family,
+                        quantization = importedArtifact.quantization ?: existing?.quantization,
+                        tokenizerHash = existing?.tokenizerHash,
+                        sizeBytes = importedArtifact.file.length(),
+                        sha256 = importedArtifact.sha256,
+                        lastModified = importedArtifact.file.lastModified(),
+                        verificationStatus = importedArtifact.verificationStatus,
+                        lastCheckedAt = System.currentTimeMillis()
+                    )
+                )
+                ModelArtifactManager.logImport(
+                    sourceLabel = finalFile.absolutePath,
+                    destinationFile = importedArtifact.file,
+                    bytesCopied = importedArtifact.bytesCopied,
+                    sha256 = importedArtifact.sha256,
+                    inspection = importedArtifact.inspection,
+                    intent = intent,
+                    roomRecordId = modelId,
+                    verificationStatus = importedArtifact.verificationStatus
+                )
+                _storageStats.value = StorageUtils.compute(app)
+                _operatorDownloadState.value = DownloadState.Complete(finalFile.absolutePath)
+                onComplete?.invoke()
+            } catch (e: Exception) {
+                _operatorDownloadState.value = DownloadState.Error(e.message ?: "Verification failed")
+                _importError.value = e.message ?: "Verification failed"
+            }
         }
     }
 
     fun replaceOperatorModel(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
         operatorDownloadJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
-            val finalFile = File(File(app.getExternalFilesDir(null), "models"), spec.filename)
+            val finalFile = File(ModelArtifactManager.modelsDir(app), spec.filename)
             if (finalFile.exists()) finalFile.delete()
             models.value.firstOrNull { it.path == finalFile.absolutePath }
                 ?.let { modelManager.deleteModel(it) }
@@ -143,9 +177,8 @@ class ModelsViewModel(
 
     private fun startOperatorDownload(spec: ModelDownloadSpec, onComplete: (() -> Unit)? = null) {
         operatorDownloadJob = viewModelScope.launch(Dispatchers.IO) {
-            val modelDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
+            val modelDir = ModelArtifactManager.modelsDir(app)
             val finalFile = File(modelDir, spec.filename)
-            val partFile = File(modelDir, "${spec.filename}.part")
 
             // Storage preflight — if size known, require size + 512 MB buffer
             if (spec.sizeBytes != null) {
@@ -159,7 +192,6 @@ class ModelsViewModel(
             }
 
             _operatorDownloadState.value = DownloadState.Queued
-            if (partFile.exists()) partFile.delete()
 
             try {
                 val conn = URL(spec.url).openConnection() as HttpURLConnection
@@ -175,57 +207,63 @@ class ModelsViewModel(
                 }
 
                 val totalBytes = conn.contentLengthLong
-                var bytesDownloaded = 0L
-                val buffer = ByteArray(64 * 1024)
-
-                conn.inputStream.use { input ->
-                    partFile.outputStream().use { output ->
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            ensureActive()
-                            output.write(buffer, 0, read)
-                            bytesDownloaded += read
-                            val pct = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes else 0f
-                            _operatorDownloadState.value =
-                                DownloadState.Downloading(pct, bytesDownloaded, totalBytes)
-                        }
+                val intent = ImportIntent(
+                    displayName = finalFile.nameWithoutExtension,
+                    intendedRole = ModelRole.MAIN.name,
+                    expectedSha256 = spec.expectedSha256
+                )
+                val importedArtifact = conn.inputStream.use { input ->
+                    ModelArtifactManager.importFromStream(
+                        input = input,
+                        destinationFile = finalFile,
+                        intent = intent,
+                        sourceLabel = spec.url
+                    ) { bytesDownloaded ->
+                        val pct = if (totalBytes > 0) bytesDownloaded.toFloat() / totalBytes else 0f
+                        _operatorDownloadState.value =
+                            DownloadState.Downloading(pct, bytesDownloaded, totalBytes)
                     }
                 }
 
-                if (!partFile.renameTo(finalFile)) {
-                    partFile.delete()
-                    _operatorDownloadState.value = DownloadState.Error("File write failed")
-                    return@launch
-                }
-
                 _operatorDownloadState.value = DownloadState.Verifying
+                val modelId = UUID.randomUUID().toString()
                 val model = LocalModel(
-                    id = UUID.randomUUID().toString(),
-                    name = finalFile.nameWithoutExtension,
-                    path = finalFile.absolutePath,
+                    id = modelId,
+                    name = importedArtifact.file.nameWithoutExtension,
+                    path = importedArtifact.file.absolutePath,
                     contextLength = 4096,
-                    sizeBytes = finalFile.length(),
-                    lastModified = finalFile.lastModified(),
-                    verificationStatus = VerificationStatus.NOT_CHECKED
+                    role = ModelRole.MAIN.name,
+                    family = importedArtifact.family,
+                    quantization = importedArtifact.quantization,
+                    sizeBytes = importedArtifact.file.length(),
+                    sha256 = importedArtifact.sha256,
+                    lastModified = importedArtifact.file.lastModified(),
+                    verificationStatus = importedArtifact.verificationStatus,
+                    lastCheckedAt = System.currentTimeMillis()
                 )
                 modelManager.addModel(model)
-                hashModelIfNeeded(model)
+                ModelArtifactManager.logImport(
+                    sourceLabel = spec.url,
+                    destinationFile = importedArtifact.file,
+                    bytesCopied = importedArtifact.bytesCopied,
+                    sha256 = importedArtifact.sha256,
+                    inspection = importedArtifact.inspection,
+                    intent = intent,
+                    roomRecordId = modelId,
+                    verificationStatus = importedArtifact.verificationStatus
+                )
                 _storageStats.value = StorageUtils.compute(app)
                 _operatorDownloadState.value = DownloadState.Complete(finalFile.absolutePath)
                 onComplete?.invoke()
 
             } catch (e: CancellationException) {
-                partFile.delete()
                 _operatorDownloadState.value = DownloadState.Cancelled
                 throw e
             } catch (_: UnknownHostException) {
-                partFile.delete()
                 _operatorDownloadState.value = DownloadState.Error("No internet connection")
             } catch (_: IOException) {
-                partFile.delete()
                 _operatorDownloadState.value = DownloadState.Error("Download failed. Check your connection.")
             } catch (e: Exception) {
-                partFile.delete()
                 _operatorDownloadState.value = DownloadState.Error(e.message ?: "Unknown error")
             }
         }
@@ -369,30 +407,44 @@ class ModelsViewModel(
         }
         if (existing != null && !replaceExisting) return
 
-        val appModelFile = if (existing != null && replaceExisting) {
+        val destinationFile = if (existing != null && replaceExisting) {
             File(existing.path)
         } else {
-            copyFileIntoModelDir(context, sourceFile, "$modelName.gguf")
+            ModelArtifactManager.uniqueModelFile(ModelArtifactManager.modelsDir(context), "$modelName.gguf")
         }
-        if (existing != null && replaceExisting && sourceFile.canonicalPath != appModelFile.canonicalPath) {
-            sourceFile.inputStream().use { input ->
-                appModelFile.outputStream().use { output -> input.copyTo(output) }
-            }
-        }
+        val intent = ImportIntent(
+            displayName = modelName,
+            intendedRole = role,
+            familyHint = family
+        )
+        val importedArtifact = ModelArtifactManager.importFromFile(sourceFile, destinationFile, intent)
+        val modelId = existing?.id ?: UUID.randomUUID().toString()
         modelManager.addModel(
             LocalModel(
-                id = existing?.id ?: UUID.randomUUID().toString(),
+                id = modelId,
                 name = modelName,
-                path = appModelFile.absolutePath,
+                path = importedArtifact.file.absolutePath,
                 contextLength = existing?.contextLength ?: 4096,
                 role = role,
-                family = family ?: existing?.family,
-                quantization = existing?.quantization,
+                family = importedArtifact.family ?: existing?.family,
+                quantization = importedArtifact.quantization ?: existing?.quantization,
                 tokenizerHash = existing?.tokenizerHash,
-                sizeBytes = appModelFile.length(),
-                lastModified = appModelFile.lastModified(),
-                verificationStatus = VerificationStatus.NOT_CHECKED
+                sizeBytes = importedArtifact.file.length(),
+                sha256 = importedArtifact.sha256,
+                lastModified = importedArtifact.file.lastModified(),
+                verificationStatus = importedArtifact.verificationStatus,
+                lastCheckedAt = System.currentTimeMillis()
             )
+        )
+        ModelArtifactManager.logImport(
+            sourceLabel = sourceFile.absolutePath,
+            destinationFile = importedArtifact.file,
+            bytesCopied = importedArtifact.bytesCopied,
+            sha256 = importedArtifact.sha256,
+            inspection = importedArtifact.inspection,
+            intent = intent,
+            roomRecordId = modelId,
+            verificationStatus = importedArtifact.verificationStatus
         )
         _storageStats.value = StorageUtils.compute(app)
     }
@@ -419,35 +471,51 @@ class ModelsViewModel(
             setDownloadState(modelName, DownloadState.Importing)
 
             try {
-                val appModelFile = copyUriIntoModelDir(context, uri, "$modelName.gguf")
-                val displayName = appModelFile.nameWithoutExtension
+                val matchedRemote = RECOMMENDED_MODELS.firstOrNull {
+                    normalizedModelName(it.name) == normalizedModelName(modelName)
+                }
+                val intent = ImportIntent(
+                    displayName = modelName,
+                    intendedRole = matchedRemote?.defaultRole?.name ?: ModelRole.MAIN.name,
+                    familyHint = matchedRemote?.family
+                )
+                val importedArtifact = ModelArtifactManager.importFromUri(
+                    context = context,
+                    uri = uri,
+                    destinationName = "$modelName.gguf",
+                    intent = intent
+                )
+                val displayName = importedArtifact.file.nameWithoutExtension
                 val modelId = UUID.randomUUID().toString()
 
                 modelManager.addModel(
                     LocalModel(
                         id = modelId,
                         name = displayName,
-                        path = appModelFile.absolutePath,
+                        path = importedArtifact.file.absolutePath,
                         contextLength = 4096,
-                        sizeBytes = appModelFile.length(),
-                        lastModified = appModelFile.lastModified(),
-                        verificationStatus = VerificationStatus.NOT_CHECKED
+                        role = intent.intendedRole,
+                        family = importedArtifact.family,
+                        quantization = importedArtifact.quantization,
+                        sizeBytes = importedArtifact.file.length(),
+                        sha256 = importedArtifact.sha256,
+                        lastModified = importedArtifact.file.lastModified(),
+                        verificationStatus = importedArtifact.verificationStatus,
+                        lastCheckedAt = System.currentTimeMillis()
                     )
+                )
+                ModelArtifactManager.logImport(
+                    sourceLabel = uri.toString(),
+                    destinationFile = importedArtifact.file,
+                    bytesCopied = importedArtifact.bytesCopied,
+                    sha256 = importedArtifact.sha256,
+                    inspection = importedArtifact.inspection,
+                    intent = intent,
+                    roomRecordId = modelId,
+                    verificationStatus = importedArtifact.verificationStatus
                 )
                 setDownloadState(displayName, DownloadState.Done)
                 _storageStats.value = StorageUtils.compute(app)
-
-                // Hash in background after import
-                val newModel = LocalModel(
-                    id = modelId,
-                    name = displayName,
-                    path = appModelFile.absolutePath,
-                    contextLength = 4096,
-                    sizeBytes = appModelFile.length(),
-                    lastModified = appModelFile.lastModified(),
-                    verificationStatus = VerificationStatus.NOT_CHECKED
-                )
-                hashModelIfNeeded(newModel)
 
                 onComplete?.invoke()
             } catch (e: Exception) {
@@ -516,6 +584,59 @@ class ModelsViewModel(
         }
     }
 
+    fun auditInstalledModels() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val records = modelManager.getModelsSnapshot().map(ModelArtifactManager::createAuditRecord)
+            ModelArtifactManager.logAudit(records)
+            _statusMessage.value = "Model audit logged for ${records.size} record(s)."
+        }
+    }
+
+    fun cleanupFailedPrimaryModels() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val appModelsDir = ModelArtifactManager.modelsDir(app)
+            val targets = modelManager.getModelsSnapshot()
+                .filter { it.role != ModelRole.DRAFT.name && it.verificationStatus == VerificationStatus.FAILED }
+
+            if (targets.isEmpty()) {
+                _statusMessage.value = "No failed primary models to clean up."
+                return@launch
+            }
+
+            var removed = 0
+            var skipped = 0
+            targets.forEach { model ->
+                Log.i(
+                    "PocketNode",
+                    "Failed primary cleanup[start]: id=${model.id} name=${model.name} path=${model.path} status=${model.verificationStatus}"
+                )
+                val result = ModelArtifactManager.cleanupFailedPrimaryArtifact(model, appModelsDir)
+                when {
+                    result.deletedFile -> {
+                        modelManager.deleteModel(model)
+                        removed += 1
+                        Log.i("PocketNode", "Failed primary cleanup[success]: id=${model.id} name=${model.name}")
+                    }
+                    !File(model.path).exists() && result.skippedReason == null -> {
+                        modelManager.deleteModel(model)
+                        removed += 1
+                        Log.i("PocketNode", "Failed primary cleanup[stale-record-removed]: id=${model.id} name=${model.name}")
+                    }
+                    else -> {
+                        skipped += 1
+                        Log.i(
+                            "PocketNode",
+                            "Failed primary cleanup[skipped]: id=${model.id} name=${model.name} reason=${result.skippedReason ?: "unknown"}"
+                        )
+                    }
+                }
+            }
+
+            _storageStats.value = StorageUtils.compute(app)
+            _statusMessage.value = "Failed primary cleanup removed $removed model(s), skipped $skipped."
+        }
+    }
+
     fun rescanModels() {
         viewModelScope.launch(Dispatchers.IO) {
             val modelsDir = File(app.getExternalFilesDir(null), "models").also { it.mkdirs() }
@@ -572,11 +693,25 @@ class ModelsViewModel(
         val currentSize = file.length()
         val currentMtime = file.lastModified()
 
-        // Skip if already hashed and file is unchanged
+        // Skip if already hashed and file is unchanged.
+        // Exception: if status is still UNKNOWN_HASH, re-check the stored hash against the
+        // registry in case new entries were added since the model was first imported.
+        // This is a fast path (no file I/O) — just a map lookup + string compare.
         if (model.sha256 != null
             && model.sizeBytes == currentSize
             && model.lastModified == currentMtime
-        ) return
+        ) {
+            if (model.verificationStatus == VerificationStatus.UNKNOWN_HASH) {
+                val knownHash = HashUtils.KNOWN_HASHES[file.nameWithoutExtension]
+                if (knownHash != null) {
+                    val upgraded = if (knownHash.equals(model.sha256, ignoreCase = true))
+                        VerificationStatus.VERIFIED else VerificationStatus.FAILED
+                    Log.i("PocketNode", "hashModelIfNeeded: ${file.nameWithoutExtension} upgraded ${model.verificationStatus} -> $upgraded (registry match)")
+                    modelManager.addModel(model.copy(verificationStatus = upgraded))
+                }
+            }
+            return
+        }
 
         modelManager.addModel(model.copy(
             verificationStatus = VerificationStatus.HASHING,
@@ -606,42 +741,6 @@ class ModelsViewModel(
                 lastCheckedAt = System.currentTimeMillis()
             ))
         }
-    }
-
-    private suspend fun copyUriIntoModelDir(context: Context, uri: Uri, fileName: String): File =
-        withContext(Dispatchers.IO) {
-            val outputFile = uniqueModelFile(context, fileName)
-            context.contentResolver.openInputStream(uri).use { input ->
-                requireNotNull(input) { "Cannot open selected model file" }
-                outputFile.outputStream().use { output -> input.copyTo(output) }
-            }
-            outputFile
-        }
-
-    private suspend fun copyFileIntoModelDir(context: Context, sourceFile: File, fileName: String): File =
-        withContext(Dispatchers.IO) {
-            val outputFile = uniqueModelFile(context, fileName)
-            if (sourceFile.canonicalPath != outputFile.canonicalPath) {
-                sourceFile.inputStream().use { input ->
-                    outputFile.outputStream().use { output -> input.copyTo(output) }
-                }
-            }
-            outputFile
-        }
-
-    private fun uniqueModelFile(context: Context, fileName: String): File {
-        val modelDir = File(context.getExternalFilesDir(null), "models").apply { mkdirs() }
-        val safeBaseName = fileName
-            .replace(Regex("""[^\w .()_-]"""), "_")
-            .ifBlank { "model.gguf" }
-        val baseName = safeBaseName.removeSuffix(".gguf")
-        var candidate = File(modelDir, safeBaseName)
-        var index = 1
-        while (candidate.exists()) {
-            candidate = File(modelDir, "$baseName ($index).gguf")
-            index++
-        }
-        return candidate
     }
 
     private fun cancelDuplicateDownloads(downloadManager: DownloadManager, modelName: String) {

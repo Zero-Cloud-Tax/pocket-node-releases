@@ -15,6 +15,8 @@ class ModelManager(context: Context) {
         modelDao.insertModel(model)
     }
 
+    suspend fun getModelsSnapshot(): List<LocalModel> = modelDao.getAllModelsSnapshot()
+
     suspend fun deleteModel(model: LocalModel) {
         modelDao.deleteModel(model)
     }

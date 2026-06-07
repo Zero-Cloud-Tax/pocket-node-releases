@@ -65,8 +65,8 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
     val systemPrompt: StateFlow<String> = _prefs.map { it[Keys.SYSTEM_PROMPT] ?: "" }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    val templateName: StateFlow<String> = _prefs.map { it[Keys.TEMPLATE_NAME] ?: "ChatML" }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "ChatML")
+    val templateName: StateFlow<String> = _prefs.map { it[Keys.TEMPLATE_NAME] ?: "Auto" }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "Auto")
 
     val edgeApiEnabled: StateFlow<Boolean> = _prefs.map { it[Keys.EDGE_API_ENABLED] ?: false }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -104,11 +104,12 @@ class SettingsViewModel(private val dataStore: DataStore<Preferences>) : ViewMod
 
     val selectedTemplate: StateFlow<PromptTemplate> = templateName.map { name ->
         when (name) {
+            "Auto" -> PromptTemplate.Auto
             "Llama3" -> PromptTemplate.Llama3
             "Alpaca" -> PromptTemplate.Alpaca
             else -> PromptTemplate.ChatML
         }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, PromptTemplate.ChatML)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, PromptTemplate.Auto)
 
     fun setTemperature(v: Float) = save { it[Keys.TEMPERATURE] = v }
     fun setTopP(v: Float) = save { it[Keys.TOP_P] = v }

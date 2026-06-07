@@ -307,7 +307,7 @@ fun SettingsScreen(
 
         // ── Template ──
         SettingsSection("Prompt Template") {
-            val templates = listOf("ChatML", "Llama3", "Alpaca")
+            val templates = listOf("Auto", "ChatML", "Llama3", "Alpaca")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 templates.forEach { name ->
                     FilterChip(

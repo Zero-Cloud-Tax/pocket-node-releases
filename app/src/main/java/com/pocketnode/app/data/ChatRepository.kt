@@ -44,6 +44,9 @@ class ChatRepository(private val chatDao: ChatDao) {
     suspend fun updateMessage(message: ChatMessage) =
         chatDao.updateMessage(message)
 
+    suspend fun deleteMessage(messageId: Long) =
+        chatDao.deleteMessageById(messageId)
+
     suspend fun clearConversation(conversationId: Long) {
         chatDao.deleteMessagesForConversation(conversationId)
         chatDao.deleteConversation(conversationId)
@@ -54,11 +57,12 @@ class ChatRepository(private val chatDao: ChatDao) {
         systemPrompt: String,
         template: PromptTemplate,
         maxHistory: Int = 10,
-        knowledgeContext: String = ""
+        knowledgeContext: String = "",
+        promptOverride: String? = null
     ): String {
         val recent = if (messages.size > maxHistory) messages.takeLast(maxHistory) else messages
         val historyMessages = if (recent.isNotEmpty()) recent.dropLast(1) else emptyList()
-        val rawPrompt = recent.lastOrNull()?.content ?: ""
+        val rawPrompt = promptOverride ?: recent.lastOrNull()?.content.orEmpty()
         val currentPrompt = if (knowledgeContext.isNotEmpty()) {
             "$knowledgeContext\n\n$rawPrompt"
         } else {

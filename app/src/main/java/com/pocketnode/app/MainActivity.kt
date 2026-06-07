@@ -62,9 +62,11 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.pocketnode.app.ui.ChatNodeEntryResolver
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
@@ -237,6 +239,8 @@ class MainActivity : ComponentActivity() {
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route ?: ""
                 val setupState by firstRunVm.state
+                val snackbarHostState = remember { SnackbarHostState() }
+                val scope = rememberCoroutineScope()
 
                 val title = when {
                     currentRoute.startsWith("chat") -> "AI Chat"
@@ -257,6 +261,7 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
                     topBar = {
                         TopAppBar(
                             title = { Text(title) },
@@ -284,7 +289,37 @@ class MainActivity : ComponentActivity() {
                             
                             composable("gallery") {
                                 GalleryScreen(
-                                    onNavigate = { route -> navController.navigate(route) }
+                                    onNavigate = { route ->
+                                        scope.launch {
+                                            val targetRoute = if (route == "models/chat") {
+                                                val decision = ChatNodeEntryResolver.resolve(
+                                                    models = modelManager.getModelsSnapshot()
+                                                )
+                                                Log.i(
+                                                    "PocketNode",
+                                                    "Chat node entry: activeMainModelId=${decision.activeMainModelId ?: "none"} " +
+                                                        "selectedDefaultMainModelId=${decision.selectedDefaultMainModelId ?: "none"} " +
+                                                        "selectedDefaultMainModelName=${decision.selectedDefaultMainModelName ?: "none"} " +
+                                                        "verificationStatus=${decision.verificationStatus ?: "none"} " +
+                                                        "role=${decision.role ?: "none"} " +
+                                                        "isPrimary=${decision.isPrimary} isDraft=${decision.isDraft} " +
+                                                        "fileExists=${decision.fileExists} reason=${decision.reason} " +
+                                                        "targetRoute=${decision.modelPathToOpen ?: "models/chat"}"
+                                                )
+                                                if (decision.redirectsToModelHub) {
+                                                    snackbarHostState.showSnackbar(
+                                                        decision.userMessage ?: "Choose a chat model in Model Hub."
+                                                    )
+                                                }
+                                                decision.modelPathToOpen?.let {
+                                                    "chat/${Uri.encode(it)}/${ChatViewModel.DEFAULT_CONVERSATION_ID}"
+                                                } ?: "models/chat"
+                                            } else {
+                                                route
+                                            }
+                                            navController.navigate(targetRoute)
+                                        }
+                                    }
                                 )
                             }
 
@@ -428,7 +463,10 @@ class MainActivity : ComponentActivity() {
                                     if (speculativeEnabled && draftModelId.isNotBlank()) {
                                         val draftValidationError = chatVm.validateModelFile(draftModelId)
                                         if (draftValidationError != null) {
-                                            chatVm.modelError.value = "Draft model error: $draftValidationError"
+                                            android.util.Log.i(
+                                                "PocketNode",
+                                                "Draft model path invalid; disabling speculative decoding and clearing stale draft selection: $draftValidationError"
+                                            )
                                             settingsVm.setSpeculativeEnabled(false)
                                             settingsVm.setDraftModelId("")
                                             chatVm.unloadDraftModel()
