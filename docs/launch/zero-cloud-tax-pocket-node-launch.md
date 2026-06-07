@@ -27,7 +27,7 @@ Before posting, confirm each item is verified and logged.
 
 ### Device
 - [x] Device: Samsung Galaxy Z Fold6
-- [ ] Android version confirmed — **TODO: check Settings → About phone before posting**
+- [x] Android version: Android 16 (SDK 36) — confirmed via `adb shell getprop ro.build.version.release`
 - [ ] App is a debug or release build? — **currently debug build; note this in the post**
 
 ### Backend
@@ -314,7 +314,7 @@ it's a named node in the cluster.
 
 ### Device
 
-Samsung Galaxy Z Fold6. Stock Android. Debug build for now.
+Samsung Galaxy Z Fold6. Android 16 (SDK 36). Debug build for now.
 
 The foldable form factor is incidental — any Android device with Vulkan
 support should work, though I haven't tested others. The Fold6's GPU handles
