@@ -693,11 +693,25 @@ class ModelsViewModel(
         val currentSize = file.length()
         val currentMtime = file.lastModified()
 
-        // Skip if already hashed and file is unchanged
+        // Skip if already hashed and file is unchanged.
+        // Exception: if status is still UNKNOWN_HASH, re-check the stored hash against the
+        // registry in case new entries were added since the model was first imported.
+        // This is a fast path (no file I/O) — just a map lookup + string compare.
         if (model.sha256 != null
             && model.sizeBytes == currentSize
             && model.lastModified == currentMtime
-        ) return
+        ) {
+            if (model.verificationStatus == VerificationStatus.UNKNOWN_HASH) {
+                val knownHash = HashUtils.KNOWN_HASHES[file.nameWithoutExtension]
+                if (knownHash != null) {
+                    val upgraded = if (knownHash.equals(model.sha256, ignoreCase = true))
+                        VerificationStatus.VERIFIED else VerificationStatus.FAILED
+                    Log.i("PocketNode", "hashModelIfNeeded: ${file.nameWithoutExtension} upgraded ${model.verificationStatus} -> $upgraded (registry match)")
+                    modelManager.addModel(model.copy(verificationStatus = upgraded))
+                }
+            }
+            return
+        }
 
         modelManager.addModel(model.copy(
             verificationStatus = VerificationStatus.HASHING,
