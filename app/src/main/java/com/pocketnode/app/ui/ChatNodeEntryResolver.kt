@@ -75,7 +75,7 @@ object ChatNodeEntryResolver {
                 selected = selected,
                 fileExists = true,
                 reason = "selected_main_model_failed_verification",
-                message = "Selected chat model failed verification. Re-download or re-import it from Model Hub."
+                message = "Selected chat model failed verification. Rescan Model Hub, re-import it, or choose another verified model."
             )
         }
 
@@ -83,12 +83,12 @@ object ChatNodeEntryResolver {
         if (knownOperatorHash != null && !selected.sha256.isNullOrBlank()) {
             if (!selected.sha256.equals(knownOperatorHash, ignoreCase = true)) {
                 return redirect(
-                    selected = selected,
-                    fileExists = true,
-                    reason = "selected_main_model_hash_mismatch",
-                    message = "Selected chat model does not match the expected PocketNode Operator artifact."
-                )
-            }
+                selected = selected,
+                fileExists = true,
+                reason = "selected_main_model_hash_mismatch",
+                message = "Selected chat model does not match the expected Pocket Node artifact. Rescan, re-import, or choose another model."
+            )
+        }
         }
 
         return ChatNodeEntryDecision(
