@@ -1,6 +1,6 @@
 # Zero Cloud Tax — Pocket Node Launch Prep
 
-Status: DRAFT — screenshots captured 2026-06-06, pending P20 digest screenshot and final review before commit
+Status: DRAFT — all proof assets captured 2026-06-06/07, pending final review before posting
 
 ---
 
@@ -76,7 +76,10 @@ Before posting, confirm each item is verified and logged.
       - `config/endpoints.yaml`: `pocket_node_api` endpoint registered
       - `config/telemetry.yaml`: `pocket_node` in monitored nodes list
 - [x] Health endpoint live: `{"status":"ok","model_loaded":true}` confirmed 2026-06-07
-- [ ] P20 digest screenshot showing healthy node — **TODO: capture from next morning digest**
+- [x] P20 digest screenshot showing healthy node:
+      `assets/pocket-node/06-p20-digest.png`
+      (Status: healthy, Backend: Vulkan,OpenCL, Eligibility: eligible, Battery: 55%,
+       Thermal: none, Last inference: 2026-06-06T23:52:57Z, all endpoints 200)
 
 ### LiteLLM / Edge Routing
 - [x] **Status: NOT YET WIRED through LiteLLM**
@@ -186,7 +189,7 @@ Capture these before drafting final post. Redact before posting (see Section 6).
 | 3 | `assets/pocket-node/03-stopping-card.png` | "Stopping…" card with spinner, input disabled | CAPTURED |
 | 4 | `assets/pocket-node/04-logcat-stop-sequence.txt` | Full stop sequence: Kotlin stop → nativeStop → native ack → cancelled | CAPTURED |
 | 5 | `assets/pocket-node/05-backend-proof.txt` | Backend Vulkan,OpenCL from logcat + generation stats + API smoke test | CAPTURED |
-| 6 | P20 digest screenshot | Pocket Node node healthy in morning digest | **TODO: capture from next morning digest** |
+| 6 | `assets/pocket-node/06-p20-digest.png` | P20 digest: Status healthy, Backend Vulkan,OpenCL, Eligibility eligible | CAPTURED — device name + IP redacted |
 
 **Note on redaction:** File paths in 02-diagnostics-model.png show the internal storage path
 `/storage/emulated/0/Android/data/com.pocketnode.app/files/models/...` — this is standard
