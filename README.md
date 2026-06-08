@@ -1,26 +1,21 @@
 # Pocket Node for Android
 
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
-![Release](https://img.shields.io/github/v/release/yourusername/Pocket-Node?label=Latest%20Release)
+![Release](https://img.shields.io/github/v/release/Zero-Cloud-Tax/pocket-node-releases?label=Latest%20Release)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Multiplatform-purple.svg)
-![Min SDK](https://img.shields.io/badge/Min%20SDK-Android%208.0+-green.svg)
+![Min SDK](https://img.shields.io/badge/Min%20SDK-Android%209.0+-green.svg)
 ![Offline AI](https://img.shields.io/badge/AI-100%25%20Offline-orange.svg)
 
 A fully offline, privacy-first AI chat app for Android. Runs large language models **entirely on-device** using [llama.cpp](https://github.com/ggerganov/llama.cpp) — no data ever leaves your phone.
 
 <div align="center">
-  <!-- TODO: Add your actual screenshots to a docs/screenshots folder -->
-  <img src="docs/screenshots/home.png" width="18%" alt="Home screen" />
-  <img src="docs/screenshots/import.png" width="18%" alt="Model import screen" />
-  <img src="docs/screenshots/chat.png" width="18%" alt="Chat streaming" />
-  <img src="docs/screenshots/rag.png" width="18%" alt="RAG document attachment" />
-  <img src="docs/screenshots/vision.png" width="18%" alt="Vision mode" />
+  <em>Screenshots coming before public launch.</em>
 </div>
 
 ## 📦 Download
 
-- **Pocket Node Lite (Free)** — [Download APK](https://github.com/yourusername/Pocket-Node/releases/latest/download/PocketNodeLite.apk)
-- **Pocket Node Pro ($19.99)** — [Get Pro](#) (Coming Soon)
+- **Pocket Node Lite (Free)** — [Download APK](https://github.com/Zero-Cloud-Tax/pocket-node-releases/releases/latest/download/PocketNodeLite.apk)
+- **Pocket Node Pro ($19.99)** — Pro purchase link coming soon.
 
 ---
 
@@ -130,7 +125,7 @@ Privacy is our core feature:
 ### Requirements
 - **Android Studio** Ladybug (2024.2+) or newer
 - **Android NDK** r26+ and **CMake** 3.22.1+
-- **Min SDK**: Android 8.0 (API 26)
+- **Min SDK**: Android 9.0 (API 28)
 
 ### Steps
 1. Clone the repository: `git clone <repo-url> "Pocket Node" && cd "Pocket Node"`

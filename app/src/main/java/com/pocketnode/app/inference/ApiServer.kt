@@ -83,7 +83,9 @@ private data class OaiChatRequest(
     val messages: List<ChatMessageRequest>,
     val stream: Boolean? = null,
     val max_tokens: Int? = null,
-    val temperature: Float? = null
+    val temperature: Float? = null,
+    val top_p: Float? = null,
+    val top_k: Int? = null
 )
 
 @Serializable
@@ -126,6 +128,26 @@ private data class OaiChunk(
     val created: Long,
     val model: String,
     val choices: List<OaiChoice>
+)
+
+// Non-streaming ("chat.completion") response types
+@Serializable
+private data class OaiNonStreamMessage(val role: String, val content: String)
+
+@Serializable
+private data class OaiNonStreamChoice(
+    val index: Int,
+    val message: OaiNonStreamMessage,
+    val finish_reason: String
+)
+
+@Serializable
+private data class OaiChatCompletion(
+    val id: String,
+    @SerialName("object") val obj: String,
+    val created: Long,
+    val model: String,
+    val choices: List<OaiNonStreamChoice>
 )
 
 object ApiServer {
@@ -296,12 +318,6 @@ object ApiServer {
                         return@post
                     }
 
-                    if (req.stream == false) {
-                        call.respond(HttpStatusCode.BadRequest,
-                            "{\"error\":\"stream=false is not supported. Set stream:true or omit stream.\"}")
-                        return@post
-                    }
-
                     val oaiSession = app.activeSession
                     val prompt = if (oaiSession != null) {
                         val meta = app.inference.nativeGetModelMetadata(oaiSession.contextPtr)
@@ -309,7 +325,14 @@ object ApiServer {
                     } else {
                         req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
                     }
-                    streamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, req.model ?: "pocket-node")
+                    val topP = req.top_p ?: 0.9f
+                    val topK = req.top_k ?: 40
+                    if (req.stream == true) {
+                        streamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node")
+                    } else {
+                        // stream == false or omitted — return a single complete response object
+                        nonStreamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node")
+                    }
                 }
             }
         }
@@ -406,6 +429,8 @@ object ApiServer {
         prompt: String,
         maxTokens: Int,
         temperature: Float,
+        topP: Float,
+        topK: Int,
         modelId: String
     ) {
         if (isStopping) {
@@ -460,7 +485,7 @@ object ApiServer {
                         app.inference.nativeGenerate(
                             ctxPtr = session.contextPtr, prompt = prompt, imageEmbedPtr = 0L,
                             maxTokens = maxTokens, temperature = temperature,
-                            topP = 0.9f, topK = 40, repeatPenalty = 1.1f,
+                            topP = topP, topK = topK, repeatPenalty = 1.1f,
                             draftCtxPtr = 0L, nDraft = 0, batchSize = 512, ubatchSize = 128,
                             callback = callback
                         )
@@ -477,6 +502,86 @@ object ApiServer {
                     writer.flush()
                 }
             }
+        } finally {
+            inferenceMutex.unlock()
+        }
+    }
+
+    private suspend fun nonStreamOaiResponse(
+        call: ApplicationCall,
+        app: MainApplication,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Float,
+        topP: Float,
+        topK: Int,
+        modelId: String
+    ) {
+        if (isStopping) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            return
+        }
+
+        val elig = readEligibility(app)
+        if (!elig.eligible) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
+            )
+            return
+        }
+
+        val session = app.activeSession
+        if (session == null) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            return
+        }
+
+        if (!inferenceMutex.tryLock()) {
+            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            return
+        }
+
+        val completionId = "chatcmpl-${System.currentTimeMillis()}"
+        val created = System.currentTimeMillis() / 1000L
+        val contentBuilder = StringBuilder()
+
+        try {
+            withContext(Dispatchers.IO) {
+                val callback = object : LlamaCallback {
+                    override fun onToken(token: String) { contentBuilder.append(token) }
+                    override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float,
+                        totalTokens: Int, promptEvalTps: Float, backendName: String,
+                        nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int) {}
+                }
+                try {
+                    app.inference.nativeGenerate(
+                        ctxPtr = session.contextPtr, prompt = prompt, imageEmbedPtr = 0L,
+                        maxTokens = maxTokens, temperature = temperature,
+                        topP = topP, topK = topK, repeatPenalty = 1.1f,
+                        draftCtxPtr = 0L, nDraft = 0, batchSize = 512, ubatchSize = 128,
+                        callback = callback
+                    )
+                    lastInferenceAt = nowIso8601()
+                    lastInferenceError = null
+                } catch (_: Exception) {
+                    lastInferenceError = "generation failed"
+                }
+            }
+            val completion = OaiChatCompletion(
+                id = completionId,
+                obj = "chat.completion",
+                created = created,
+                model = modelId,
+                choices = listOf(
+                    OaiNonStreamChoice(
+                        index = 0,
+                        message = OaiNonStreamMessage(role = "assistant", content = contentBuilder.toString()),
+                        finish_reason = "stop"
+                    )
+                )
+            )
+            call.respondText(json.encodeToString(completion), ContentType.Application.Json)
         } finally {
             inferenceMutex.unlock()
         }

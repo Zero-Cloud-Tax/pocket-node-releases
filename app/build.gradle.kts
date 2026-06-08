@@ -51,22 +51,31 @@ android {
             }
         }
 
-        val proSecret = System.getenv("POCKETNODE_PRO_HMAC_SECRET") ?: "dev-only-secret-change-me"
-        val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
-        buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
-        buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
+        // PRO_HMAC_SECRET and PRO_PURCHASE_URL are injected per build type below.
+        // They must NOT live here — defaultConfig applies to all variants including release.
         // POCKETNODE_OPERATOR_URL is injected per build type — see buildTypes below.
     }
 
     buildTypes {
         debug {
-            // Debug: SmolLM2 135M test fallback so download pipeline works without env config.
+            // Debug: permissive fallbacks so local dev works without any env config.
             val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
                 ?: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_0.gguf"
             buildConfigField("String", "POCKETNODE_OPERATOR_URL", "\"$operatorUrl\"")
+            val proSecret = System.getenv("POCKETNODE_PRO_HMAC_SECRET") ?: "dev-only-secret-change-me"
+            val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: "https://example.com/pocketnode-pro"
+            buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
+            buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
         }
         release {
-            // Release: env var → gradle property → empty string (shows "Source not configured").
+            // Secrets are validated at execution time by validateReleaseSecrets (below),
+            // not here — configuration-phase throws block assembleDebug too.
+            val proSecret = System.getenv("POCKETNODE_PRO_HMAC_SECRET") ?: ""
+            val purchaseUrl = System.getenv("POCKETNODE_PURCHASE_URL") ?: ""
+            buildConfigField("String", "PRO_HMAC_SECRET", "\"$proSecret\"")
+            buildConfigField("String", "PRO_PURCHASE_URL", "\"$purchaseUrl\"")
+
+            // Operator URL: env var → gradle property → empty string (shows "Source not configured").
             // The SmolLM2 test URL must NEVER appear in a release build.
             val operatorUrl = System.getenv("POCKETNODE_OPERATOR_URL")
                 ?: (project.findProperty("pocketnode.operator.url") as? String ?: "")
@@ -100,6 +109,27 @@ android {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
+    }
+}
+
+// Fail-fast guard: runs only when assembleRelease is in the task graph.
+// Configuration-phase throws (inside buildTypes{}) also block assembleDebug — don't do that.
+tasks.register("validateReleaseSecrets") {
+    doFirst {
+        val secret = System.getenv("POCKETNODE_PRO_HMAC_SECRET") ?: ""
+        if (secret.isBlank()) throw GradleException(
+            "POCKETNODE_PRO_HMAC_SECRET is not set. Export the env var before running assembleRelease."
+        )
+        val url = System.getenv("POCKETNODE_PURCHASE_URL") ?: ""
+        if (url.isBlank()) throw GradleException(
+            "POCKETNODE_PURCHASE_URL is not set. Export the env var before running assembleRelease."
+        )
+    }
+}
+
+afterEvaluate {
+    tasks.named("assembleRelease") {
+        dependsOn("validateReleaseSecrets")
     }
 }
 

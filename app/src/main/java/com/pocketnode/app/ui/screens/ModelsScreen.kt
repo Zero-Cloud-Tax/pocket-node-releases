@@ -190,8 +190,10 @@ fun ModelsScreen(
                 .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            OutlinedButton(onClick = { viewModel.auditInstalledModels() }) {
-                Text("Audit Models")
+            if (com.pocketnode.app.BuildConfig.DEBUG) {
+                OutlinedButton(onClick = { viewModel.auditInstalledModels() }) {
+                    Text("Audit Models")
+                }
             }
             if (failedPrimaryCount > 0) {
                 OutlinedButton(

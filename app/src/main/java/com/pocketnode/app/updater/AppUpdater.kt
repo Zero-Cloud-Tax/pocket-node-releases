@@ -25,6 +25,16 @@ object AppUpdater {
     private const val PREFS_NAME = "app_updater"
     private const val KEY_DISMISSED_VERSION = "dismissed_version"
 
+    // TODO(RC1 → GA): Set UPDATES_ENABLED = true once the release repo is confirmed live.
+    // Required before enabling:
+    //   1. Zero-Cloud-Tax/pocket-node-releases exists as a public GitHub repo.
+    //   2. The RC1/GA release is published with:
+    //        - A signed APK asset (e.g. PocketNodeLite.apk)
+    //        - A matching SHA-256 sidecar (e.g. PocketNodeLite.apk.sha256)
+    //   3. Manual test: checkForUpdate() returns a non-null UpdateInfo with correct hash.
+    // Disabled for RC1 to prevent network calls to an unverified release repo.
+    private const val UPDATES_ENABLED = false
+
     data class UpdateInfo(
         val version: String,
         val downloadUrl: String,
@@ -33,6 +43,7 @@ object AppUpdater {
     )
 
     suspend fun checkForUpdate(context: Context): UpdateInfo? = withContext(Dispatchers.IO) {
+        if (!UPDATES_ENABLED) return@withContext null
         try {
             val url = URL(GITHUB_API_URL)
             val connection = url.openConnection() as HttpURLConnection
