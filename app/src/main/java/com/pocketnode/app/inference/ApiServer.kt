@@ -546,6 +546,7 @@ object ApiServer {
         val created = System.currentTimeMillis() / 1000L
         val contentBuilder = StringBuilder()
 
+        var generationFailed = false
         try {
             withContext(Dispatchers.IO) {
                 val callback = object : LlamaCallback {
@@ -566,22 +567,27 @@ object ApiServer {
                     lastInferenceError = null
                 } catch (_: Exception) {
                     lastInferenceError = "generation failed"
+                    generationFailed = true
                 }
             }
-            val completion = OaiChatCompletion(
-                id = completionId,
-                obj = "chat.completion",
-                created = created,
-                model = modelId,
-                choices = listOf(
-                    OaiNonStreamChoice(
-                        index = 0,
-                        message = OaiNonStreamMessage(role = "assistant", content = contentBuilder.toString()),
-                        finish_reason = "stop"
+            if (generationFailed) {
+                call.respond(HttpStatusCode.InternalServerError, "{\"error\":\"generation failed\"}")
+            } else {
+                val completion = OaiChatCompletion(
+                    id = completionId,
+                    obj = "chat.completion",
+                    created = created,
+                    model = modelId,
+                    choices = listOf(
+                        OaiNonStreamChoice(
+                            index = 0,
+                            message = OaiNonStreamMessage(role = "assistant", content = contentBuilder.toString()),
+                            finish_reason = "stop"
+                        )
                     )
                 )
-            )
-            call.respondText(json.encodeToString(completion), ContentType.Application.Json)
+                call.respondText(json.encodeToString(completion), ContentType.Application.Json)
+            }
         } finally {
             inferenceMutex.unlock()
         }
