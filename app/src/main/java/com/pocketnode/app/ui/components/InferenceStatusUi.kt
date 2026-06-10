@@ -40,7 +40,7 @@ data class InferenceStatusCardState(
 fun VerificationStatusBadge(status: String?) {
     val (label, color) = when (status) {
         VerificationStatus.VERIFIED -> "VERIFIED" to Color(0xFF2E7D32)
-        VerificationStatus.UNKNOWN_HASH -> "UNKNOWN_HASH" to Color(0xFFEF6C00)
+        VerificationStatus.UNKNOWN_HASH -> "Unverified" to Color(0xFFEF6C00)
         VerificationStatus.FAILED -> "FAILED" to MaterialTheme.colorScheme.error
         VerificationStatus.HASHING -> "HASHING" to MaterialTheme.colorScheme.primary
         else -> return

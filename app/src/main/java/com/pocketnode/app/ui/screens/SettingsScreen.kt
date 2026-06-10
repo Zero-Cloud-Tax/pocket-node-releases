@@ -125,6 +125,12 @@ fun SettingsScreen(
                 steps = 99,
                 onValueChange = { settings.setGpuLayers(it.toInt()) }
             )
+            Text(
+                "0 = CPU only. Higher values offload more layers to GPU/Vulkan when supported. " +
+                "Use Recommended Settings if unsure.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
 
         // ── Speculative Decoding ──

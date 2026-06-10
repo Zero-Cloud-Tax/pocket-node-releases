@@ -581,7 +581,8 @@ fun InstalledModelCard(
                 } else if (model.verificationStatus == VerificationStatus.UNKNOWN_HASH) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Hash is not in the trusted registry yet. Rescan after updates or re-import if you expected a verified model.",
+                        "Hash not in the local registry — community models can still run. " +
+                        "Rescan after updates or re-import if you expected a verified badge.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
