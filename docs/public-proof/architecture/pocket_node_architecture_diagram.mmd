@@ -1,0 +1,72 @@
+---
+title: Pocket Node Architecture
+---
+flowchart TD
+    subgraph Clients["Client Layer"]
+        CC[Continue.dev]
+        OC[OpenAI-compatible client]
+    end
+
+    subgraph Gateway["Neo — Gateway Host (homelab x86)"]
+        direction TB
+        GATE["Edge Gate\nFastAPI :4001\nfold6_preflight_thermal_v2\nPhase 9.8"]
+        LLMR["LiteLLM Router\nDocker :4000\nmodel alias registry"]
+        DLOG["Decision Log\n.jsonl on disk"]
+    end
+
+    subgraph CapCheck["Pre-Flight Check (per request)"]
+        direction LR
+        CAPS["GET /capabilities\n← Fold6 :11434"]
+        THERMAL["thermal_zone temp\neligible_for_inference\nlast_inference_at"]
+        CAPS --> THERMAL
+    end
+
+    subgraph Tier1["Tier 1 — Fold6"]
+        F6["Samsung Galaxy Z Fold6\nOllama RC2\nVulkan + OpenCL\ngpu_layers=39\nSmolLM3 3.1B Q4_0\n~13+ TPS\n:11434"]
+    end
+
+    subgraph Tier2["Tier 2 — Mac Studio"]
+        MS["Mac Studio\nOllama\nHigher-capacity\nfallback\n:11434"]
+    end
+
+    subgraph Tier3["Tier 3 — Moolah"]
+        MO["Moolah node\nOllama\nSecond fallback\n:11434"]
+    end
+
+    CC -->|POST /v1/chat/completions| GATE
+    OC -->|POST /v1/chat/completions| GATE
+
+    GATE -->|"1. poll before Tier-1 route"| CAPS
+    THERMAL -->|"eligible + temp < 65C"| GATE
+
+    GATE -->|"allow_fold6\n[small prompt, eligible, cool]"| LLMR
+    GATE -->|"bypass_oversized\n[>8000 chars / >12000 bytes / >5 msgs]"| LLMR
+    GATE -->|"bypass_thermal\n[temp >=65C or eligible=false]"| LLMR
+    GATE -->|"bypass_tools\n[tool_calls present]"| LLMR
+    GATE -->|"bypass_model_not_loaded\n[/capabilities unreachable]"| LLMR
+
+    GATE --> DLOG
+
+    LLMR -->|"allow_fold6"| F6
+    LLMR -->|"bypass_* routes"| MS
+    MS -->|"unavailable / blackhole"| MO
+
+    F6 -.->|"SSE stream / completion\nx-edge-gate-route header"| GATE
+    MS -.->|"SSE stream / completion"| GATE
+    MO -.->|"completion"| GATE
+
+    GATE -.->|"response"| CC
+    GATE -.->|"response"| OC
+
+    classDef client fill:#e8f4f8,stroke:#2196F3,color:#000
+    classDef gateway fill:#fff3e0,stroke:#FF9800,color:#000
+    classDef tier1 fill:#e8f5e9,stroke:#4CAF50,color:#000
+    classDef tier2 fill:#fce4ec,stroke:#E91E63,color:#000
+    classDef tier3 fill:#f3e5f5,stroke:#9C27B0,color:#000
+    classDef check fill:#fffde7,stroke:#FFC107,color:#000
+    classDef log fill:#eceff1,stroke:#607D8B,color:#000
+
+    class CC,OC client
+    class GATE,LLMR gateway
+    class DLOG log
+    class CAPS,

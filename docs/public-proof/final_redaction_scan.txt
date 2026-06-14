@@ -1,0 +1,129 @@
+POCKET NODE — FINAL REDACTION SCAN
+===================================
+Scan date: 2026-06-14T20:21:03Z
+Repo scanned: pocket-node-public-repo/
+Files scanned: 11 (all .md, .yml, .yaml, .env*, .mmd, .txt files)
+
+---
+
+PATTERN RESULTS
+---------------
+
+[100.x.x.x Tailscale IPs]
+  Pattern: 100\.[0-9]
+  Result:  CLEAN — no matches
+
+[Gateway node Tailscale IP]
+  Pattern: 100.[GATEWAY-OCTET]
+  Result:  CLEAN — no matches
+
+[Fold6 Tailscale IP]
+  Pattern: 100.[FOLD6-OCTET]
+  Result:  CLEAN — no matches
+
+[Mac Studio Tailscale IP]
+  Pattern: 100.[MAC-OCTET]
+  Result:  CLEAN — no matches
+
+[Moolah Tailscale IP]
+  Pattern: 100.[MOOLAH-OCTET]
+  Result:  CLEAN — no matches
+
+[192.168.x.x private IPs]
+  Pattern: 192\.168\.
+  Result:  CLEAN — no matches
+
+[10.x.x.x private IPs]
+  Pattern: 10\.[0-9]
+  Result:  CLEAN — no matches
+
+[sk- API keys]
+  Pattern: sk-[a-zA-Z0-9]
+  Result:  CLEAN — no matches
+
+[Bearer tokens]
+  Pattern: Bearer [a-zA-Z0-9]
+  Result:  CLEAN — no matches
+
+[Device owner name]
+  Pattern: [owner name]
+  Result:  CLEAN — no matches
+
+[Gateway hostname path]
+  Pattern: /home/[gateway-user]
+  Result:  CLEAN — no matches
+
+[/home/[user] paths]
+  Pattern: /home/[a-z]
+  Result:  CLEAN — no matches
+
+[Internal service directory]
+  Pattern: [internal-service-name]
+  Result:  CLEAN — no matches
+
+[Keystore references]
+  Pattern: keystore
+  Result:  CLEAN — no matches
+
+[Owner email prefix]
+  Pattern: [email-prefix]
+  Result:  CLEAN — no matches
+
+[LITELLM_MASTER_KEY value]
+  Pattern: LITELLM_MASTER_KEY=<actual value>
+  Result:  CLEAN — file has LITELLM_MASTER_KEY=[YOUR-LITELLM-MASTER-KEY] (placeholder, safe)
+
+[DATABASE_URL value]
+  Pattern: DATABASE_URL with real credentials
+  Result:  CLEAN — file has DATABASE_URL=postgresql://[DB-USER]:[DB-PASS]@... (placeholder, safe)
+
+[API key literals]
+  Pattern: api_key.*=.*[a-zA-Z0-9]{20}
+  Result:  CLEAN — no matches
+
+---
+
+ENVIRONMENT VARIABLE HITS (SAFE — ALL PLACEHOLDERS)
+----------------------------------------------------
+The `.env value` pattern matched 4 lines in example files.
+All confirmed as [PLACEHOLDER] values, not real credentials:
+
+  examples/docker-compose.example.yml:21  LITELLM_MASTER_KEY=[YOUR-LITELLM-MASTER-KEY]  SAFE
+  examples/docker-compose.example.yml:22  DATABASE_URL=postgresql://[DB-USER]:[DB-PASS]@ SAFE
+  examples/docker-compose.example.yml:31  POSTGRES_USER=[DB-USER]                        SAFE
+  examples/docker-compose.example.yml:32  POSTGRES_PASSWORD=[DB-PASS]                    SAFE
+  examples/gate.env.example:12            GATE_HOST=[YOUR-GATEWAY-TAILSCALE-IP]          SAFE
+  examples/gate.env.example:20            # LITELLM_BASE=http://[YOUR-GATEWAY-...]        SAFE
+  examples/gate.env.example:21            # FOLD6_CAPABILITIES_URL=http://[...]           SAFE
+
+No real values present in any example file.
+
+---
+
+MANUAL REVIEW ITEMS
+-------------------
+
+TC-06 / TE-03: /capabilities node field
+  The redacted terminal evidence README (screenshots/redacted_terminal_evidence_only/README.md)
+  already contains the REDACTED form:
+    "node": "[owner]'s Z Fold6"
+  The original raw capture (p27_terminal_evidence/terminal_captures_v2.json) contains
+  the real name and is NOT included in this repo. SAFE.
+
+---
+
+VERDICT
+-------
+
+REDACTION SCAN: PASS
+
+  - No Tailscale IPs (100.x.x.x) in any public file
+  - No API keys or bearer tokens
+  - No real device owner name
+  - No gateway hostname or internal paths
+  - No internal service directory references
+  - No keystore references
+  - All example env vars use [PLACEHOLDER] values
+  - TC-06 node name already redacted in the included evidence file
+
+All 11 files in pocket-node-public-repo/ are safe for public GitHub publication.
