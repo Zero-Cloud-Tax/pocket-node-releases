@@ -1,10 +1,13 @@
 package com.pocketnode.app.inference
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import com.pocketnode.app.diagnostics.ThermalZoneReader
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.pocketnode.app.MainApplication
 import com.pocketnode.app.diagnostics.ServiceHealthLog
@@ -100,6 +103,7 @@ private data class OaiChoice(
 
 @Serializable
 private data class CapabilitiesResponse(
+    // ── Existing fields (DO NOT rename or remove — backward compat) ───────────
     val node: String,
     val role: String,
     val service_alive: Boolean,
@@ -111,7 +115,24 @@ private data class CapabilitiesResponse(
     val eligible_for_inference: Boolean,
     val reason_if_not_eligible: String?,
     val last_inference_at: String?,
-    val last_error: String?
+    val last_error: String?,
+    // ── B.3: OS thermal-zone telemetry fields ─────────────────────────────────
+    // Hottest zone across all readable /sys/class/thermal/thermal_zone* zones
+    val peak_thermal_zone_c: Double?,
+    val peak_thermal_zone_type: String?,
+    // Hottest CPU-classified zone (type contains cpu/cluster/gold/silver/etc.)
+    val peak_cpu_zone_c: Double?,
+    val peak_cpu_zone_type: String?,
+    // Hottest GPU-classified zone (type contains gpu/gpuss/adreno/etc.)
+    val peak_gpu_zone_c: Double?,
+    val peak_gpu_zone_type: String?,
+    // How many zones were successfully read vs. had errors
+    val thermal_zone_readable_count: Int,
+    val thermal_zone_error_count: Int,
+    // Non-null if the OS-zone gate is the reason inference is blocked/warned
+    val thermal_zone_gate_reason: String?,
+    // Battery junction temperature from ACTION_BATTERY_CHANGED (null if unavailable)
+    val battery_temperature_c: Double?
 )
 
 @Serializable
@@ -168,8 +189,19 @@ object ApiServer {
     private val cachedApiKey = MutableStateFlow("")
     private var keyCollectorJob: Job? = null
 
+    // ── B.3: OS thermal-zone gate thresholds ──────────────────────────────────
+    // Empirical defaults from B.2 benchmarking on Samsung Z Fold 6 / Snapdragon 8 Gen 3.
+    // NOT validated hardware safety limits — adjust with per-device profiling.
+    private const val THERMAL_ZONE_WARN_C           = 55.0  // telemetry only; inference not blocked
+    private const val THERMAL_ZONE_SOFT_BLOCK_CPU_C = 60.0  // block if peak CPU zone >= 60°C
+    private const val THERMAL_ZONE_SOFT_BLOCK_GPU_C = 60.0  // block if peak GPU zone >= 60°C
+    private const val THERMAL_ZONE_HARD_BLOCK_C     = 65.0  // hard block if ANY zone >= 65°C
+    private const val THERMAL_ZONE_COOLDOWN_C       = 58.0  // hard block lifts only when ALL zones < 58°C
+
     @Volatile private var isStarted = false
     @Volatile private var isStopping = false
+    // Hysteresis flag: true when a hard-block threshold was crossed; clears when all zones cool below COOLDOWN_C
+    @Volatile private var thermalZoneHardBlocked = false
 
     // Set to true when a stop() drain times out. Never reset — the process holds
     // leaked native allocations and must not attempt to restart the server.
@@ -236,7 +268,18 @@ object ApiServer {
                             eligible_for_inference = elig.eligible,
                             reason_if_not_eligible = elig.reason,
                             last_inference_at = lastInferenceAt,
-                            last_error = lastInferenceError
+                            last_error = lastInferenceError,
+                            // B.3: OS thermal-zone telemetry
+                            peak_thermal_zone_c          = elig.peakThermalZoneC,
+                            peak_thermal_zone_type       = elig.peakThermalZoneType,
+                            peak_cpu_zone_c              = elig.peakCpuZoneC,
+                            peak_cpu_zone_type           = elig.peakCpuZoneType,
+                            peak_gpu_zone_c              = elig.peakGpuZoneC,
+                            peak_gpu_zone_type           = elig.peakGpuZoneType,
+                            thermal_zone_readable_count  = elig.thermalZoneReadableCount,
+                            thermal_zone_error_count     = elig.thermalZoneErrorCount,
+                            thermal_zone_gate_reason     = elig.thermalZoneGateReason,
+                            battery_temperature_c        = elig.batteryTemperatureC
                         )),
                         ContentType.Application.Json
                     )
@@ -621,33 +664,55 @@ object ApiServer {
     }
 
     private data class EligibilityResult(
+        // ── Existing fields ───────────────────────────────────────────────────
         val eligible: Boolean,
         val reason: String?,
         val modelLoaded: Boolean,
         val batteryPercent: Int,
         val charging: Boolean,
         val thermalStatus: String,
-        val thermalCode: Int
+        val thermalCode: Int,
+        // ── B.3: OS thermal-zone data ─────────────────────────────────────────
+        val peakThermalZoneC: Double?,
+        val peakThermalZoneType: String?,
+        val peakCpuZoneC: Double?,
+        val peakCpuZoneType: String?,
+        val peakGpuZoneC: Double?,
+        val peakGpuZoneType: String?,
+        val thermalZoneReadableCount: Int,
+        val thermalZoneErrorCount: Int,
+        val thermalZoneGateReason: String?,
+        val batteryTemperatureC: Double?
     )
 
     private fun readEligibility(app: MainApplication): EligibilityResult {
-        if (debugForceBlock) {
-            val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-            return EligibilityResult(
-                eligible = false,
-                reason = "debug_forced_block",
-                modelLoaded = app.activeSession != null,
-                batteryPercent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100),
-                charging = bm.isCharging,
-                thermalStatus = "none",
-                thermalCode = 0
-            )
-        }
-
+        // ── Battery ──────────────────────────────────────────────────────────
         val bm = app.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val batteryPercent = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).coerceIn(0, 100)
         val charging = bm.isCharging
 
+        // Battery temperature via sticky ACTION_BATTERY_CHANGED (tenths of °C → °C)
+        val batteryTempC: Double? = try {
+            val intent = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val rawTemp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+            if (rawTemp != null && rawTemp != Int.MIN_VALUE) rawTemp / 10.0 else null
+        } catch (_: Exception) { null }
+
+        if (debugForceBlock) {
+            return EligibilityResult(
+                eligible = false, reason = "debug_forced_block",
+                modelLoaded = app.activeSession != null,
+                batteryPercent = batteryPercent, charging = charging,
+                thermalStatus = "none", thermalCode = 0,
+                peakThermalZoneC = null, peakThermalZoneType = null,
+                peakCpuZoneC = null, peakCpuZoneType = null,
+                peakGpuZoneC = null, peakGpuZoneType = null,
+                thermalZoneReadableCount = 0, thermalZoneErrorCount = 0,
+                thermalZoneGateReason = null, batteryTemperatureC = batteryTempC
+            )
+        }
+
+        // ── PowerManager thermal status (existing gate — unchanged) ──────────
         val thermalCode: Int
         val thermalStatus: String
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -660,13 +725,43 @@ object ApiServer {
             thermalStatus = "none"
         }
 
+        // ── B.3: OS thermal-zone gate ─────────────────────────────────────────
+        val zoneSnap = ThermalZoneReader.readSnapshot()
+        val peakZone    = zoneSnap.peakC    ?: 0.0
+        val peakCpuZone = zoneSnap.peakCpuC ?: 0.0
+        val peakGpuZone = zoneSnap.peakGpuC ?: 0.0
+
+        // Hard-block hysteresis: latch on >= HARD_BLOCK, release only when < COOLDOWN
+        if (peakZone >= THERMAL_ZONE_HARD_BLOCK_C) {
+            thermalZoneHardBlocked = true
+        } else if (thermalZoneHardBlocked && peakZone < THERMAL_ZONE_COOLDOWN_C) {
+            thermalZoneHardBlocked = false
+        }
+
+        // Gate reason (most severe wins)
+        val thermalZoneGateReason: String? = when {
+            thermalZoneHardBlocked ->
+                "thermal_zone_hard_block (peak=${"%.1f".format(peakZone)}°C >= ${THERMAL_ZONE_HARD_BLOCK_C}°C; cooldown to ${THERMAL_ZONE_COOLDOWN_C}°C)"
+            peakCpuZone >= THERMAL_ZONE_SOFT_BLOCK_CPU_C ->
+                "thermal_zone_cpu_soft_block (${zoneSnap.peakCpuType ?: "cpu"}=${"%.1f".format(peakCpuZone)}°C >= ${THERMAL_ZONE_SOFT_BLOCK_CPU_C}°C)"
+            peakGpuZone >= THERMAL_ZONE_SOFT_BLOCK_GPU_C ->
+                "thermal_zone_gpu_soft_block (${zoneSnap.peakGpuType ?: "gpu"}=${"%.1f".format(peakGpuZone)}°C >= ${THERMAL_ZONE_SOFT_BLOCK_GPU_C}°C)"
+            peakZone >= THERMAL_ZONE_WARN_C ->
+                "thermal_zone_warn (peak=${"%.1f".format(peakZone)}°C >= ${THERMAL_ZONE_WARN_C}°C; inference allowed)"
+            else -> null
+        }
+
         val modelLoaded = app.activeSession != null
         val reason = when {
             !modelLoaded -> "model_not_loaded"
             batteryPercent < 30 && !charging -> "battery_below_threshold"
             thermalCode >= 3 -> "thermal_severe"
+            thermalZoneHardBlocked -> "thermal_zone_hard_block"
+            peakCpuZone >= THERMAL_ZONE_SOFT_BLOCK_CPU_C -> "thermal_zone_cpu_soft_block"
+            peakGpuZone >= THERMAL_ZONE_SOFT_BLOCK_GPU_C -> "thermal_zone_gpu_soft_block"
             else -> null
         }
+
         return EligibilityResult(
             eligible = reason == null,
             reason = reason,
@@ -674,7 +769,17 @@ object ApiServer {
             batteryPercent = batteryPercent,
             charging = charging,
             thermalStatus = thermalStatus,
-            thermalCode = thermalCode
+            thermalCode = thermalCode,
+            peakThermalZoneC      = zoneSnap.peakC,
+            peakThermalZoneType   = zoneSnap.peakType,
+            peakCpuZoneC          = zoneSnap.peakCpuC,
+            peakCpuZoneType       = zoneSnap.peakCpuType,
+            peakGpuZoneC          = zoneSnap.peakGpuC,
+            peakGpuZoneType       = zoneSnap.peakGpuType,
+            thermalZoneReadableCount = zoneSnap.readableCount,
+            thermalZoneErrorCount    = zoneSnap.errorCount,
+            thermalZoneGateReason    = thermalZoneGateReason,
+            batteryTemperatureC      = batteryTempC
         )
     }
 

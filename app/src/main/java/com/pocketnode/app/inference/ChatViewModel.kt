@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.BatteryManager
 import android.os.Build
 import android.net.Uri
+import com.pocketnode.app.diagnostics.ThermalZoneReader
 import android.util.Log
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -825,6 +826,11 @@ class ChatViewModel(
             else -> null
         }
 
+        // B.3: OS thermal-zone peaks (concise — do not bloat every prompt)
+        val zoneSnap = ThermalZoneReader.readSnapshot()
+        val osPeakCpuStr = zoneSnap.peakCpuC?.let { "${"%.1f".format(it)}°C" } ?: "n/a"
+        val osPeakGpuStr = zoneSnap.peakGpuC?.let { "${"%.1f".format(it)}°C" } ?: "n/a"
+
         return buildString {
             append("service_alive=").append(true)
             append(" model_loaded=").append(modelLoaded)
@@ -832,6 +838,8 @@ class ChatViewModel(
             append(" battery=").append(batteryPercent).append('%')
             append(" charging=").append(charging)
             append(" thermal=").append(thermalStatus)
+            append(" os_peak_cpu_zone=").append(osPeakCpuStr)
+            append(" os_peak_gpu_zone=").append(osPeakGpuStr)
             append(" eligible_for_inference=").append(eligible)
             if (reason != null) {
                 append(" reason_if_not_eligible=").append(reason)

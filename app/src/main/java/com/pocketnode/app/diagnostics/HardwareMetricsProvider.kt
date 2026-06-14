@@ -1,6 +1,9 @@
 package com.pocketnode.app.diagnostics
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Debug
 import android.os.PowerManager
@@ -15,6 +18,7 @@ object HardwareMetricsProvider {
         val nativeSize  = Debug.getNativeHeapSize().toFloat() / (1024 * 1024)
         val nativeFree  = Debug.getNativeHeapFreeSize().toFloat() / (1024 * 1024)
 
+        // PowerManager thermal status (existing behaviour — unchanged)
         val (thermalStatus, thermalLabel) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
             @Suppress("NewApi")
@@ -24,21 +28,41 @@ object HardwareMetricsProvider {
             -1 to "API < 29"
         }
 
+        // B.3: OS thermal-zone snapshot
+        val zoneSnap = ThermalZoneReader.readSnapshot()
+
+        // B.3: Battery temperature from sticky ACTION_BATTERY_CHANGED (tenths of °C → °C)
+        val batteryTempC: Double? = try {
+            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val rawTemp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+            if (rawTemp != null && rawTemp != Int.MIN_VALUE) rawTemp / 10.0 else null
+        } catch (_: Exception) { null }
+
         return DiagnosticMetrics(
-            jvmUsedMb         = jvmUsed,
-            jvmMaxMb          = jvmMax,
-            nativeAllocatedMb = nativeAlloc,
-            nativeHeapSizeMb  = nativeSize,
-            nativeHeapFreeMb  = nativeFree,
-            thermalStatus     = thermalStatus,
-            thermalLabel      = thermalLabel,
-            manufacturer      = Build.MANUFACTURER,
-            model             = Build.MODEL,
-            device            = Build.DEVICE,
-            hardware          = Build.HARDWARE,
-            supportedAbis     = Build.SUPPORTED_ABIS.toList(),
-            availableCores    = rt.availableProcessors(),
-            isLoaded          = true
+            jvmUsedMb             = jvmUsed,
+            jvmMaxMb              = jvmMax,
+            nativeAllocatedMb     = nativeAlloc,
+            nativeHeapSizeMb      = nativeSize,
+            nativeHeapFreeMb      = nativeFree,
+            thermalStatus         = thermalStatus,
+            thermalLabel          = thermalLabel,
+            manufacturer          = Build.MANUFACTURER,
+            model                 = Build.MODEL,
+            device                = Build.DEVICE,
+            hardware              = Build.HARDWARE,
+            supportedAbis         = Build.SUPPORTED_ABIS.toList(),
+            availableCores        = rt.availableProcessors(),
+            isLoaded              = true,
+            // B.3 OS zone fields
+            peakThermalZoneC      = zoneSnap.peakC,
+            peakThermalZoneType   = zoneSnap.peakType,
+            peakCpuZoneC          = zoneSnap.peakCpuC,
+            peakCpuZoneType       = zoneSnap.peakCpuType,
+            peakGpuZoneC          = zoneSnap.peakGpuC,
+            peakGpuZoneType       = zoneSnap.peakGpuType,
+            thermalZoneReadableCount = zoneSnap.readableCount,
+            thermalZoneErrorCount    = zoneSnap.errorCount,
+            batteryTemperatureC      = batteryTempC
         )
     }
 

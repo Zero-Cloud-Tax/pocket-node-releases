@@ -3,9 +3,14 @@ project("pocketnode" CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 
-# Baseline ARMv8-A — compatible with all arm64 devices including those without dotprod/i8mm
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -march=armv8-a")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=armv8-a")
+# Snapdragon 8 Gen 3 / ARMv8.4-A performance build (B.3 patch — restored from RC1 tag)
+# Enables dotprod (SDOT/UDOT) and i8mm (SMMLA/UMMLA) ISA extensions used by GGML GEMM kernels.
+# This APK targets arm64-v8a and is built for the Samsung Galaxy Z Fold 6 (SM-F956U).
+# If you need a generic arm64 build that runs on pre-ARMv8.4 devices, create a separate
+# build flavor with -march=armv8-a and set abiFilters accordingly.
+# Validated device: Snapdragon 8 Gen 3, Android 16 — dotprod and i8mm are guaranteed present.
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=armv8.4-a+dotprod+i8mm")
 
 # ============================================================
 # llama.cpp — fetch and build from source via FetchContent
