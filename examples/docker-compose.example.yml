@@ -1,0 +1,41 @@
+# Pocket Node — Docker Compose Example
+# This is a REDACTED example. Replace all [PLACEHOLDER] values before use.
+# NEVER commit your real docker-compose.yml with IPs or secrets to version control.
+
+services:
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    # restart: always is required for post-reboot auto-start
+    # restart: unless-stopped does NOT retry containers that exit non-zero
+    # on Docker daemon startup — which happens during Prisma migration.
+    restart: always
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    ports:
+      # Bind to your gateway node's Tailscale IP only
+      # Do NOT bind to 0.0.0.0 — this would expose LiteLLM to the network
+      - "[YOUR-GATEWAY-TAILSCALE-IP]:4000:4000"
+    environment:
+      - LITELLM_MASTER_KEY=[YOUR-LITELLM-MASTER-KEY]
+      - DATABASE_URL=postgresql://[DB-USER]:[DB-PASS]@litellm-db:5432/litellm
+    depends_on:
+      - litellm-db
+
+  litellm-db:
+    image: postgres:15
+    container_name: litellm-db
+    restart: always
+    environment:
+      - POSTGRES_USER=[DB-USER]
+      - POSTGRES_PASSWORD=[DB-PASS]
+      - POSTGRES_DB=litellm
+    volumes:
+      - litellm-db-data:/var/lib/postgresql/data
+
+  # Other services (caddy, portainer, etc.) are not part of Pocket Node
+  # and are omitted from this example.
+
+volumes:
+  litellm-db-data:

@@ -1,0 +1,37 @@
+pocket-node/
+├── .gitignore                                         (1,121 bytes)
+├── LICENSE                                            (1,081 bytes)  MIT
+├── README.md                                          (8,749 bytes)  ← MAIN ENTRY POINT
+├── architecture/
+│   └── pocket_node_architecture_diagram.mmd           (2,501 bytes)  Mermaid flowchart
+├── docs/
+│   ├── routing_policy.md                              (4,612 bytes)  Full routing reference
+│   ├── thermal_safety.md                              (3,659 bytes)  Thermal API gap docs
+│   └── validation_results.md                          (6,866 bytes)  Full proof-point table
+├── examples/
+│   ├── docker-compose.example.yml                     (1,368 bytes)  Redacted — all secrets are [PLACEHOLDER]
+│   ├── gate.env.example                               (  829 bytes)  Redacted — IP is [PLACEHOLDER]
+│   └── litellm_config.example.yaml                    (1,639 bytes)  Redacted — all IPs are [PLACEHOLDER]
+└── screenshots/
+    └── redacted_terminal_evidence_only/
+        └── README.md                                  (3,259 bytes)  TE-01 through TE-06 code blocks
+
+Total files: 11
+Total size: ~35,684 bytes (~35 KB)
+
+---
+
+NOT INCLUDED (excluded by .gitignore or mission scope):
+  gate.py                            ← gate source not yet public (planned P28)
+  gate.env                           ← real file contains Tailscale IP
+  docker-compose.yml                 ← real file contains IPs + DB credentials
+  litellm/config.yaml                ← real file contains all mesh IPs
+  sovereign_bridge/.env              ← real file contains LiteLLM master key
+  p27_*.py                           ← internal drill scripts
+  p27_*_artifacts/                   ← internal validation artifacts
+  p27_terminal_evidence/             ← pre-redaction captures
+  pocket_node_redaction_checklist.md ← internal
+  pocket_node_public_launch_notes.md ← internal
+
+---
+Generated: 2026-06-14T20:21:03Z

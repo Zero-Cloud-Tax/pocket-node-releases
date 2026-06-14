@@ -1,184 +1,237 @@
-# Pocket Node for Android
+# Pocket Node
 
-![Release](https://img.shields.io/github/v/release/Zero-Cloud-Tax/pocket-node-releases?label=Latest%20Release)
-![Prerelease](https://img.shields.io/badge/status-RC2%20prerelease-orange.svg)
-![Min SDK](https://img.shields.io/badge/Min%20SDK-Android%209.0+-green.svg)
-![Offline AI](https://img.shields.io/badge/AI-100%25%20Offline-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-blue.svg)
+**Turning an Android phone into a thermally-aware local inference node.**
 
-A fully offline, privacy-first AI chat app for Android. Runs large language models **entirely on-device** using [llama.cpp](https://github.com/ggerganov/llama.cpp) — no data ever leaves your phone.
-
-<div align="center">
-  <img src="docs/launch/assets/pocket-node/01-chat-screen.png" width="220" alt="Chat screen" />
-  <img src="docs/launch/assets/pocket-node/02-diagnostics-engine.png" width="220" alt="Diagnostics — engine" />
-  <img src="docs/launch/assets/pocket-node/02-diagnostics-model.png" width="220" alt="Diagnostics — model" />
-  <img src="docs/launch/assets/pocket-node/03-stopping-card.png" width="220" alt="Stopping card" />
-</div>
+> Status: Working prototype / proof-of-concept. Not a polished consumer product.
+> Validation: Completed. Post-reboot survival confirmed. All routing smokes passing.
 
 ---
 
-## 📦 Download — v0.1.0-rc2 (Public Prerelease)
+## What Is This?
 
-**[→ Download PocketNode-0.1.0-rc2-signed.apk](https://github.com/Zero-Cloud-Tax/pocket-node-releases/releases/tag/v0.1.0-rc2)**
+Pocket Node is a homelab project that routes OpenAI-compatible inference requests
+through a Samsung Galaxy Z Fold6 running a local LLM runtime (Ollama RC2, Vulkan
+backend). A FastAPI gateway on a homelab machine intercepts every request, checks
+the phone's thermal state and model availability, and decides in real time whether
+to let the phone handle the request or bypass it to a stronger local machine.
 
-This is a **free public prerelease**. Sideload only — not on the Play Store yet.
+No cloud inference. No subscriptions. Entirely local.
 
-**SHA-256 verification:**
-```
-f1fe2887dd9f7ab0f9bd62021857bae0efdcb98c090b489a626b960154964126  PocketNode-0.1.0-rc2-signed.apk
-```
-
-**Install steps:**
-1. Download the APK from the release page above.
-2. On your Android device: Settings → Apps → Special app access → Install unknown apps → enable for your browser or file manager.
-3. Open the APK and tap Install.
-
-**Requirements:** Android 9.0+ (API 28), arm64-v8a device.
-
-> **Note:** The auto-updater is disabled in RC2. Future releases require a manual reinstall.
-
-> **Note:** Public Pro key issuance and payment are not open in RC2. The app includes the licensing framework, but key generation is not yet available.
+The Fold6 is not a remote client — it is the inference server. The Android device
+runs the model, responds to capability queries, and reports its own thermal status
+over the private mesh network. The gateway enforces thermal safety and load policies
+before any tokens are generated.
 
 ---
 
-## 🧠 Why Pocket Node?
-
-Pocket Node turns your phone into a private AI computer:
-
-- **No cloud**
-- **No accounts**
-- **No tracking**
-- **No subscriptions**
-- **No data leaving your device**
-
----
-
-## ✨ What Works in RC2
-
-| Feature | RC2 Status |
-|---------|-----------|
-| On-device LLM inference (llama.cpp) | ✅ Working |
-| GGUF model import (file picker) | ✅ Working |
-| Streaming token output | ✅ Working |
-| Model Hub + curated downloads | ✅ Working |
-| Vulkan & OpenCL GPU acceleration | ✅ Working |
-| Edge API (OpenAI-compatible, port 11434) | ✅ Working |
-| Multiple chat templates | ✅ Working |
-| First-run device profiling | ✅ Working |
-| Pro licensing (key validation) | ✅ Framework in place — key issuance not open yet |
-| Document RAG (PDF/text) | 🔜 Not in RC2 |
-| Vision / image input | 🔜 Not in RC2 |
-| OTA auto-updater | 🔜 Not in RC2 |
-
----
-
-## 🌐 Edge API
-
-When Edge API is enabled in Settings, the app exposes an OpenAI-compatible endpoint on your local network:
+## Architecture
 
 ```
-POST http://<device-ip>:11434/v1/chat/completions
-POST http://<device-ip>:11434/api/generate
-GET  http://<device-ip>:11434/
+[Continue.dev / OpenAI-compatible client]
+           |
+           v
+  [Neo Edge Gate — FastAPI :4001]
+   fold6_preflight_thermal_v2 policy
+           |
+     +-----+------+
+     |             |
+  /capabilities  oversized / tools / thermal-unsafe
+  poll (Fold6)        |
+     |             v
+     |        [LiteLLM Router — Docker :4000]
+  eligible          |
+     |         +----+----+
+     v         |         |
+  [Fold6]  [Mac Studio] [Moolah]
+  Tier 1   Tier 2       Tier 3
 ```
 
-Works with Continue.dev, Open WebUI, and any client that accepts an OpenAI-compatible base URL.
-
-> ⚠️ The Edge API has **no authentication** in RC2. Only use it on a trusted LAN. Do not expose it to the internet.
+See [`architecture/pocket_node_architecture_diagram.mmd`](architecture/pocket_node_architecture_diagram.mmd) for a full Mermaid diagram.
 
 ---
 
-## 📊 Benchmarks
+## Hardware
 
-*RC2 is tested and confirmed working on the Samsung Galaxy Z Fold 6. Numbers below are from earlier development on other devices and may not reflect current performance.*
+| Node | Device | Role |
+|------|--------|------|
+| Fold6 | Samsung Galaxy Z Fold6 | Primary inference node (Tier 1) |
+| Mac Studio | Apple Mac Studio | Fallback inference node (Tier 2) |
+| Moolah | Home server | Second fallback node (Tier 3) |
+| Neo | Homelab x86 machine | Gateway host (LiteLLM + edge gate) |
 
-### Galaxy Z Fold 6 (Snapdragon 8 Gen 3) — RC2 confirmed
-- Llama 3.2 3B Q4_K_M → inference functional ✅
-
-### Earlier reference numbers (not yet re-verified on RC2)
-
-| Device | Model | Tokens/s |
-|--------|-------|---------|
-| Pixel 8 Pro (Tensor G3) | Phi-3.5-mini Q4_K_M | ~18 |
-| Pixel 8 Pro (Tensor G3) | Llama-3.2-3B Q4_K_M | ~12 |
-| Galaxy S24 Ultra (SD 8 Gen 3) | Phi-3.5-mini Q4_K_M | ~28 |
-| Galaxy S24 Ultra (SD 8 Gen 3) | Mistral-7B Q4_K_M | ~9 |
+All nodes communicate over a private Tailscale mesh. No ports are exposed to the
+public internet.
 
 ---
 
-## 🤖 Model Compatibility
+## Runtime Stack (Fold6)
 
-| Model | Works? | Notes |
-|-------|--------|-------|
-| Phi-3.5-mini | ✔ | Fast, good reasoning |
-| Llama-3.2-3B | ✔ | Best instruction following for the size |
-| Mistral-7B | ✔ | High quality, needs 6GB+ RAM |
-| Qwen2.5-7B | ⚠ | Slow on mid-range devices |
-| LLaVA (vision) | 🔜 | Not supported in RC2 |
-
----
-
-## 🛠️ Tech Stack
-
-- **UI:** Kotlin + Jetpack Compose + Material 3
-- **Inference:** JNI + C++ + llama.cpp (NDK, arm64-v8a)
-- **Acceleration:** Vulkan compute + OpenCL (Adreno)
-- **Local Storage:** Room DB + DataStore
-- **Edge API:** Ktor CIO (port 11434)
+- **Runtime:** Ollama RC2
+- **Backend:** Vulkan + OpenCL
+- **Model:** SmolLM3 3.1B Q4_0
+- **GPU layers offloaded:** 39
+- **Measured throughput:** ~13+ tokens/second (final validated path)
+- **Streaming:** SSE (`stream: true`) — validated end-to-end with `[DONE]` terminator
+- **Thermal guard:** raw `/sys/class/thermal/thermal_zone*/temp` polling
 
 ---
 
-## 🔒 Security Notes
+## Routing Policy
 
-- **No internet permission for core inference** — internet is only used for model downloads and the Edge API when enabled.
-- **Network Security Config** blocks untrusted traffic.
-- **Local-only Room DB** — chat history never syncs anywhere.
-- **Zero analytics** — no Crashlytics, no trackers.
+The gate applies `fold6_preflight_thermal_v2` to every incoming request with
+model alias `pocket-node-fold6`:
 
----
+| Condition | Route | Destination |
+|-----------|-------|-------------|
+| All checks pass | `allow_fold6` | Fold6 |
+| Raw body > 12,000 bytes | `bypass_oversized` | Mac Studio → Moolah |
+| Message text > 8,000 chars | `bypass_oversized` | Mac Studio → Moolah |
+| Message count > 5 | `bypass_oversized` | Mac Studio → Moolah |
+| Tool calls present | `bypass_tools` | Mac Studio → Moolah |
+| Fold6 `/capabilities` unreachable | `bypass_model_not_loaded` | Mac Studio → Moolah |
+| `eligible_for_inference = false` | `bypass_thermal` | Mac Studio → Moolah |
+| Thermal zone ≥ 65°C | `bypass_thermal` | Mac Studio → Moolah |
 
-## 🚀 Roadmap
+Every decision is logged to a JSONL decision log on the gateway host.
 
-- [ ] Public Pro key issuance / payment flow
-- [ ] RAG — PDF and text document Q&A
-- [ ] Vision — image input (LLaVA-style)
-- [ ] OTA auto-updater
-- [ ] On-device quantization
-- [ ] Chat export / import
-- [ ] Play Store release
-
----
-
-## 🔧 Troubleshooting
-
-- **Model fails to load:** Ensure enough RAM is free. Try a smaller model (Q4_K_M 3B or less).
-- **App crashes on startup:** Grant storage permissions (Android 13+).
-- **Vulkan not supported:** App falls back to CPU automatically. Performance will be lower.
-- **Out of memory on 7B models:** 7B models need ~8GB physical RAM.
-- **NDK not found (building from source):** Install NDK r26+ via Android Studio SDK Manager.
+See [`docs/routing_policy.md`](docs/routing_policy.md) for full routing documentation.
 
 ---
 
-## 🏗️ Building from Source
+## Thermal Safety
 
-### Requirements
-- Android Studio Ladybug (2024.2+) or newer
-- Android NDK r26+ and CMake 3.22.1+
-- Min SDK: Android 9.0 (API 28)
-- Set env vars before building release: `POCKETNODE_PRO_HMAC_SECRET`, `POCKETNODE_PURCHASE_URL`, `POCKETNODE_OPERATOR_URL`
+The Android `PowerManager` thermal API (`thermal_status`) reported `none` even
+during sustained inference loads. This API is not reliable for real-time thermal
+gating at the hardware level.
 
-### Steps
-1. `git clone <repo-url> "Pocket Node" && cd "Pocket Node"`
-2. Open in Android Studio.
-3. SDK Tools → ensure NDK and CMake are installed.
-4. `./gradlew assembleDebug` — first build takes ~5 min (compiles llama.cpp).
+The gate instead reads raw thermal zone temperatures from the Fold6 over the
+mesh network via a custom `/capabilities` endpoint. During a validated 60-minute
+soak, a real temperature spike to **76.8°C** was observed. The gate:
+
+1. Detected the spike via the `/capabilities` poll.
+2. Immediately returned `bypass_thermal` for the next request.
+3. Routed the request to Mac Studio without contacting the phone.
+4. Re-polled after cooldown and restored `allow_fold6` eligibility automatically.
+
+The phone was never sent an inference request while at unsafe temperature. No
+manual intervention was required.
+
+See [`docs/thermal_safety.md`](docs/thermal_safety.md) for full thermal documentation.
 
 ---
 
-## 🤝 Contributing
+## Validation Summary
 
-Pull requests are welcome. For major changes, open an issue first.
+| Test | Result |
+|------|--------|
+| Fold6 Ollama RC2 local inference | PASS |
+| Vulkan + OpenCL backend, 39 GPU layers | PASS |
+| ~13+ TPS on SmolLM3 3.1B Q4_0 | PASS |
+| stream:false completion | PASS |
+| stream:true SSE + [DONE] | PASS |
+| Thermal hard-block at 76.8°C | PASS |
+| Automatic cooldown recovery | PASS |
+| Oversized bypass → Mac Studio | PASS |
+| Mac Studio blackhole → Moolah failover | PASS |
+| 60-minute soak with tooling notes | PASS |
+| Continue.dev client integration | PASS |
+| Post-reboot: gate auto-start (systemd linger) | PASS |
+| Post-reboot: LiteLLM auto-start (Docker restart:always) | PASS |
+| Post-reboot routing smokes | PASS |
+| Reboot recovery time | 24 seconds |
 
-## 📜 License
+See [`docs/validation_results.md`](docs/validation_results.md) for full proof-point evidence.
 
-MIT — see individual dependencies for their licenses. llama.cpp is licensed under MIT.
+---
+
+## Known Limitations
+
+- **Model size:** The Fold6 can only run small quantized models comfortably.
+  SmolLM3 3.1B Q4_0 was the validated path. Larger models may not fit or may
+  run at unacceptable speed or thermal cost.
+- **Thermal API gap:** Android `PowerManager.thermal_status` is not granular
+  enough for real-time inference gating. Raw thermal zone polling is required
+  and is not a public stable API.
+- **Single-device Tier 1:** If the Fold6 is off, charging, or the screen is
+  locked in a way that pauses Ollama, the gate bypasses automatically, but Tier 1
+  becomes unavailable until the device recovers.
+- **No APK distribution:** The Android-side runtime is not packaged for
+  general distribution. Setup requires manual Ollama installation and Tailscale
+  configuration.
+- **Not a consumer product:** This is a homelab proof-of-concept. Configuration
+  requires familiarity with Docker, systemd, Tailscale, and Android developer
+  tools.
+- **Release migration deferred:** A formal release packaging pass (Dockerfiles,
+  install scripts, documentation site) is planned but not yet done.
+
+---
+
+## What Was Fixed During This Project
+
+This project went through multiple validation phases. Key issues discovered and
+fixed during the proof run:
+
+- **LiteLLM `restart: unless-stopped`:** Did not reliably restart the container
+  after a system reboot when the container had exited non-zero. Fixed to
+  `restart: always`.
+- **Model alias routing:** The gate only applies routing logic to the canonical
+  alias `pocket-node-fold6`. Using any other alias falls through as a
+  pass-through without thermal or oversize checking. All clients must use
+  the canonical alias.
+- **`FOLD6_MAX_CHARS = 8_000`:** Python underscore notation in the gate script
+  was misread by initial diagnostic tooling as `8`. Confirmed correctly as 8,000.
+- **Thermal API gap:** `PowerManager.thermal_status = none` during real spike.
+  Raw thermal zone polling was the only reliable signal.
+
+---
+
+## What Remains Deferred
+
+- Formal release migration (install scripts, Dockerfile packaging)
+- APK packaging and distribution
+- Automated benchmark suite
+- Multi-model support on Fold6
+- Battery impact documentation
+- Formal API documentation
+- Web UI for routing dashboard
+- Alerting on thermal bypass events
+
+---
+
+## Next Steps
+
+1. Add screenshots: Ollama running on device, Continue.dev in use, decision log
+2. Publish gate source (planned for next iteration)
+3. Post to r/LocalLLaMA
+4. Begin release migration planning
+
+---
+
+## Repository Structure
+
+```
+pocket-node/
+  README.md                               <- this file
+  LICENSE
+  .gitignore
+  architecture/
+    pocket_node_architecture_diagram.mmd  <- Mermaid diagram
+  docs/
+    routing_policy.md                     <- full routing policy reference
+    thermal_safety.md                     <- thermal safety documentation
+    validation_results.md                 <- full proof-point table
+  examples/
+    gate.env.example                      <- redacted gate env template
+    docker-compose.example.yml            <- redacted compose template
+    litellm_config.example.yaml           <- redacted LiteLLM config template
+  screenshots/
+    redacted_terminal_evidence_only/      <- terminal evidence (no device photos yet)
+```
+
+---
+
+*Pocket Node is a personal homelab project. It is shared as a working proof
+that commodity Android hardware can serve as a real inference node in a
+properly designed local routing architecture. Performance claims are based on
+validated measurements on the specific hardware described. Your hardware will
+differ.*

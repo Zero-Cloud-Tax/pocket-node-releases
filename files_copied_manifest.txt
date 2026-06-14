@@ -1,0 +1,56 @@
+POCKET NODE — FILES COPIED MANIFEST
+=====================================
+Assembled: 2026-06-14T20:21:03Z
+Repo root: pocket-node-public-repo/
+
+---
+
+FILE                                              SOURCE                                      STATUS      CHANGES APPLIED
+----                                              ------                                      ------      ---------------
+README.md                                         p27_public_proof_package/pocket_node_public_readme.md
+                                                                                              ASSEMBLED   - Updated internal file references to correct repo paths
+                                                                                                          - Fixed architecture diagram link → architecture/pocket_node_architecture_diagram.mmd
+                                                                                                          - Fixed validation table link → docs/validation_results.md
+                                                                                                          - Fixed thermal/routing links → docs/thermal_safety.md, docs/routing_policy.md
+                                                                                                          - Next Steps: removed references to internal files (redaction_checklist, reddit_post)
+                                                                                                          - Repository Structure section updated to match actual repo layout
+
+LICENSE                                           NEW                                         CREATED     MIT License, 2026, "Pocket Node Contributors"
+
+.gitignore                                        NEW                                         CREATED     Excludes: real configs, p27_* scripts/artifacts, .env files, logs, backups
+
+architecture/pocket_node_architecture_diagram.mmd p27_public_proof_package/pocket_node_architecture_diagram.mmd
+                                                                                              COPIED      No changes — file was already clean (no IPs)
+
+docs/validation_results.md                        p27_public_proof_package/pocket_node_validation_table.md
+                                                                                              COPIED      No changes — file was already clean
+
+docs/routing_policy.md                            EXTRACTED from README routing section       CREATED     Expanded with: canonical alias requirement, priority table, response headers,
+                                                                                                          oversized thresholds, bypass destinations, decision log schema, pre-flight check details
+
+docs/thermal_safety.md                            EXTRACTED from README thermal section       CREATED     Expanded with: PowerManager API gap detail, sysfs polling explanation,
+                                                                                                          validated thermal event walkthrough, threshold table, stability caveat,
+                                                                                                          builder guidance
+
+examples/docker-compose.example.yml              GENERATED (previous session)                CLEAN       All IPs → [PLACEHOLDER], all secrets → [PLACEHOLDER]
+
+examples/gate.env.example                        GENERATED (previous session)                CLEAN       Real IP replaced with [YOUR-GATEWAY-TAILSCALE-IP]
+
+examples/litellm_config.example.yaml             GENERATED (previous session)                CLEAN       All Tailscale IPs replaced with [PLACEHOLDER]
+
+screenshots/redacted_terminal_evidence_only/README.md
+                                                  ASSEMBLED from approved_screenshot_manifest.md
+                                                                                              ASSEMBLED   TE-01 through TE-06 code blocks embedded
+                                                                                                          TE-03: "node" field → "[owner]'s Z Fold6" (TC-06 redaction applied)
+                                                                                                          All upstream IPs in TE-01 → [MESH-IP]
+
+---
+
+NOT COPIED (excluded from public repo):
+  pocket_node_blog_post.md           ← excluded (Reddit/blog post, not repo file)
+  pocket_node_reddit_post.md         ← excluded (Reddit post text)
+  pocket_node_redaction_checklist.md ← excluded (internal)
+  pocket_node_public_launch_notes.md ← excluded (internal)
+  p27_*_artifacts/                   ← excluded (internal validation artifacts)
+  p27_terminal_evidence/             ← excluded (pre-redaction captures)
+  p27_*.py scripts                   ← excluded (internal drill scripts)
