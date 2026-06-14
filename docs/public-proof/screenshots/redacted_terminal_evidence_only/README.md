@@ -118,7 +118,4 @@ Smoke C (stream:true):
 
 ---
 
-## Device Screenshots
-
-Device screenshots (Fold6 `ollama list`, Continue.dev in use) are pending
-and will be added before the Reddit post.
+## Device Screensho

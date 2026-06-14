@@ -98,5 +98,4 @@ If you replicate this architecture on a different Android device:
 1. Do not rely on `PowerManager.getCurrentThermalStatus()` for real-time gating.
 2. Poll `/sys/class/thermal/thermal_zone*/temp` directly.
 3. Count readable zones — the number will differ by device.
-4. Tune the threshold for your device's thermal characteristics.
-5. Test with a real sustained load, not a synthetic spike.
+4. Tune the threshold fo

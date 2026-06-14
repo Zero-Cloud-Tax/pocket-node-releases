@@ -13,20 +13,20 @@ PATTERN RESULTS
   Pattern: 100\.[0-9]
   Result:  CLEAN — no matches
 
-[100.66.89.35 (Neo)]
-  Pattern: 100.66
+[Gateway node Tailscale IP]
+  Pattern: 100.[GATEWAY-OCTET]
   Result:  CLEAN — no matches
 
-[100.99.70.73 (Fold6)]
-  Pattern: 100.99
+[Fold6 Tailscale IP]
+  Pattern: 100.[FOLD6-OCTET]
   Result:  CLEAN — no matches
 
-[100.120.179.122 (Mac Studio)]
-  Pattern: 100.120
+[Mac Studio Tailscale IP]
+  Pattern: 100.[MAC-OCTET]
   Result:  CLEAN — no matches
 
-[100.75.182.74 (Moolah)]
-  Pattern: 100.75
+[Moolah Tailscale IP]
+  Pattern: 100.[MOOLAH-OCTET]
   Result:  CLEAN — no matches
 
 [192.168.x.x private IPs]
@@ -45,28 +45,28 @@ PATTERN RESULTS
   Pattern: Bearer [a-zA-Z0-9]
   Result:  CLEAN — no matches
 
-[Sheens name]
-  Pattern: Sheens
+[Device owner name]
+  Pattern: [owner name]
   Result:  CLEAN — no matches
 
-[/home/neo path]
-  Pattern: /home/neo
+[Gateway hostname path]
+  Pattern: /home/[gateway-user]
   Result:  CLEAN — no matches
 
 [/home/[user] paths]
   Pattern: /home/[a-z]
   Result:  CLEAN — no matches
 
-[sovereign_bridge / sovereign_brain]
-  Pattern: sovereign
+[Internal service directory]
+  Pattern: [internal-service-name]
   Result:  CLEAN — no matches
 
-[keystore references]
+[Keystore references]
   Pattern: keystore
   Result:  CLEAN — no matches
 
-[gixxer email]
-  Pattern: gixxer
+[Owner email prefix]
+  Pattern: [email-prefix]
   Result:  CLEAN — no matches
 
 [LITELLM_MASTER_KEY value]
@@ -119,9 +119,9 @@ REDACTION SCAN: PASS
 
   - No Tailscale IPs (100.x.x.x) in any public file
   - No API keys or bearer tokens
-  - No real owner name (Sheens)
-  - No /home/neo or internal paths
-  - No sovereign_bridge or sovereign_brain references
+  - No real device owner name
+  - No gateway hostname or internal paths
+  - No internal service directory references
   - No keystore references
   - All example env vars use [PLACEHOLDER] values
   - TC-06 node name already redacted in the included evidence file

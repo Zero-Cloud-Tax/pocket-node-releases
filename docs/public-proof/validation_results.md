@@ -90,5 +90,4 @@ hardware and configuration described.
 
 ---
 
-*All tests run on physical hardware. No emulation. No synthetic load.*
-*Results are specific to the hardware and software versions described in the README.*
+*All tests run on physical hardware. No emulation. No synthetic l

@@ -18,13 +18,13 @@
 - [x] `docs/thermal_safety.md` extracted and expanded from README
 - [x] All 3 example configs in `examples/` — confirmed clean (all [PLACEHOLDER])
 - [x] Terminal evidence TE-01 through TE-06 embedded in `screenshots/redacted_terminal_evidence_only/README.md`
-- [x] TC-06 redaction applied: `"Sheens' Z Fold6"` → `"[owner]'s Z Fold6"` in TE-03
+- [x] TC-06 redaction applied: device owner name replaced with `"[owner]'s Z Fold6"` in TE-03
 - [x] Full redaction scan PASSED (see `final_redaction_scan.txt`)
 - [x] No Tailscale IPs (100.x.x.x) in any file
 - [x] No API keys or bearer tokens in any file
 - [x] No internal usernames or hostnames in any file
 - [x] No keystore references in any file
-- [x] No sovereign_bridge or internal path references in any file
+- [x] No internal service directory references in any file
 
 ---
 
@@ -108,10 +108,10 @@ The following files exist on your machine and must never appear in the public re
 
 | File / Path | Reason |
 |-------------|--------|
-| `/home/neo/homelab/litellm/edge_gate/gate.env` | Real Tailscale IP |
-| `/home/neo/sovereign_brain/sovereign_bridge/.env` | LiteLLM master key |
-| `/home/neo/homelab/docker-compose.yml` | IPs + DB credentials |
-| `/home/neo/homelab/litellm/config.yaml` | All mesh Tailscale IPs |
-| `p27_*.py` (Windows) | SSH patterns, auth extraction |
-| `p27_*_artifacts/` (Windows) | Internal state, JSON blobs |
+| `gate.env` (on gateway host) | Real Tailscale IP |
+| `[internal-service]/.env` (on gateway host) | LiteLLM master key |
+| `docker-compose.yml` (real, on gateway host) | IPs + DB credentials |
+| `litellm/config.yaml` (real, on gateway host) | All mesh Tailscale IPs |
+| `p27_*.py` (internal scripts) | SSH patterns, auth extraction |
+| `p27_*_artifacts/` (internal) | Internal state, JSON blobs |
 | `p27_terminal_evidence/terminal_captures_v2.json` | Pre-redaction captures (contains real name) |

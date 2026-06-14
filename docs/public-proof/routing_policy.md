@@ -124,7 +124,4 @@ used despite being present in the response.
 
 Gate source (`gate.py`) is not yet included in this repository. A cleaned
 release version with all constants externalized to environment variables is
-planned for the next iteration (P28).
-
-See [`examples/gate.env.example`](../examples/gate.env.example) for the
-environment variable interface.
+planned for the n

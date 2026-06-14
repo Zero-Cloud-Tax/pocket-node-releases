@@ -26,7 +26,7 @@ NOT INCLUDED (excluded by .gitignore or mission scope):
   gate.env                           ← real file contains Tailscale IP
   docker-compose.yml                 ← real file contains IPs + DB credentials
   litellm/config.yaml                ← real file contains all mesh IPs
-  sovereign_bridge/.env              ← real file contains LiteLLM master key
+  [internal-service]/.env              ← real file contains LiteLLM master key
   p27_*.py                           ← internal drill scripts
   p27_*_artifacts/                   ← internal validation artifacts
   p27_terminal_evidence/             ← pre-redaction captures

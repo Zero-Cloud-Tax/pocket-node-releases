@@ -14,19 +14,14 @@ This file tracks what cannot be automated and requires manual action.
 **Action:** Create new public repo at github.com. Do NOT initialize with any files.
 **Time:** 2 minutes
 
-### MA-02: Run `git init` and first commit locally
-**Who:** You (or Claude can assist via terminal if you grant access)
+### MA-02: Push the public-proof-package branch
+**Who:** You
 **Commands:**
 ```sh
 cd "C:\Users\Rhear\Pocket Node\pocket-node-public-repo"
-git init
-git add .
-git commit -m "Initial public proof package: Pocket Node v0.1-proof"
-git remote add origin https://github.com/[YOUR-USERNAME]/pocket-node.git
-git branch -M main
-git push -u origin main
+git push -u origin public-proof-package
 ```
-**Time:** 5 minutes
+**Time:** 2 minutes
 
 ### MA-03: Post-push spot check
 **Who:** You

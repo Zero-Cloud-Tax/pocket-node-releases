@@ -35,7 +35,4 @@ services:
       - litellm-db-data:/var/lib/postgresql/data
 
   # Other services (caddy, portainer, etc.) are not part of Pocket Node
-  # and are omitted from this example.
-
-volumes:
-  litellm-db-data:
+  # and are omitted from this e
