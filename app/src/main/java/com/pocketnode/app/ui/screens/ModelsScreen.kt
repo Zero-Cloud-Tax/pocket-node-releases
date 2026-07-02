@@ -195,6 +195,20 @@ fun ModelsScreen(
                     Text("Audit Models")
                 }
             }
+            if (models.isNotEmpty()) {
+                OutlinedButton(onClick = {
+                    viewModel.exportInventory(context) { uri ->
+                        val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "application/json"
+                            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(android.content.Intent.createChooser(shareIntent, "Export model inventory"))
+                    }
+                }) {
+                    Text("Export Inventory")
+                }
+            }
             if (failedPrimaryCount > 0) {
                 OutlinedButton(
                     onClick = { confirmCleanupFailedPrimaries = true },
@@ -289,6 +303,7 @@ fun ModelsScreen(
                         model = model,
                         onSelect = { onModelSelected(model) },
                         onDelete = { pendingDelete = model },
+                        onReverify = { viewModel.reverifyModel(model) },
                         tpsLabel = tpsLabel,
                         onToggleRole = { viewModel.setModelRole(model, ModelRole.DRAFT.name) }
                     )
@@ -310,6 +325,7 @@ fun ModelsScreen(
                             }
                         },
                         onDelete = { pendingDelete = model },
+                        onReverify = { viewModel.reverifyModel(model) },
                         onToggleRole = { viewModel.setModelRole(model, ModelRole.MAIN.name) }
                     )
                 }
@@ -515,6 +531,7 @@ fun InstalledModelCard(
     model: LocalModel,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
+    onReverify: (() -> Unit)? = null,
     isDraft: Boolean = false,
     tpsLabel: String? = null,
     onToggleRole: (() -> Unit)? = null
@@ -595,6 +612,12 @@ fun InstalledModelCard(
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.primary
                     )
+                }
+            }
+            if (onReverify != null) {
+                IconButton(onClick = onReverify) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Reverify",
+                        tint = MaterialTheme.colorScheme.primary)
                 }
             }
             IconButton(onClick = onDelete) {

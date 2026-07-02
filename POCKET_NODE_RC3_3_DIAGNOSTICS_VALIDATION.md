@@ -3,7 +3,7 @@
 Date/time: 2026-07-02, 16:56–17:02 local
 Branch: main
 Starting HEAD: 1478686 ("P29: harden Pocket Node foreground service lifecycle")
-Final HEAD: (see final response — inserted after this phase's commit is created)
+Final HEAD: b38b33e ("P29: improve Pocket Node diagnostics screen")
 Device: Samsung SM-F956U (Galaxy Z Fold 6), Android 16, serial RFCX60BRDWA
 APK: app/build/outputs/apk/debug/app-debug.apk (debug build)
 

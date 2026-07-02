@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -636,6 +637,103 @@ class ModelsViewModel(
             _statusMessage.value = "Failed primary cleanup removed $removed model(s), skipped $skipped."
         }
     }
+
+    /**
+     * Recomputes SHA-256 and re-inspects the on-disk GGUF for a single model,
+     * without re-downloading or re-importing it, and persists the refreshed
+     * verification status. Reuses the same validation primitive
+     * [ModelArtifactManager.validateExistingFile] the import path already uses —
+     * no new hashing/verification logic. P29 RC3.4.
+     */
+    fun reverifyModel(model: LocalModel) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = File(model.path)
+            if (!file.exists()) {
+                modelManager.addModel(
+                    model.copy(
+                        verificationStatus = VerificationStatus.FAILED,
+                        lastCheckedAt = System.currentTimeMillis()
+                    )
+                )
+                _statusMessage.value = "Reverify failed for ${model.name}: file not found."
+                return@launch
+            }
+
+            val intent = ImportIntent(
+                displayName = model.name,
+                intendedRole = model.role,
+                expectedSha256 = model.sha256
+            )
+            val result = runCatching { ModelArtifactManager.validateExistingFile(file, intent) }
+            result.onSuccess { artifact ->
+                modelManager.addModel(
+                    model.copy(
+                        sha256 = artifact.sha256,
+                        sizeBytes = artifact.bytesCopied,
+                        verificationStatus = artifact.verificationStatus,
+                        lastCheckedAt = System.currentTimeMillis()
+                    )
+                )
+                _statusMessage.value = "Reverified ${model.name}: ${artifact.verificationStatus}"
+            }.onFailure { e ->
+                modelManager.addModel(
+                    model.copy(
+                        verificationStatus = VerificationStatus.FAILED,
+                        lastCheckedAt = System.currentTimeMillis()
+                    )
+                )
+                _statusMessage.value = "Reverify failed for ${model.name}: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Writes a read-only JSON summary of every installed model's audit record
+     * (same fields [ModelArtifactManager.createAuditRecord] already computes for
+     * logging) to the app's external files "Download" directory — already
+     * exposed via the existing FileProvider `file_paths.xml` `downloads` entry,
+     * the same one AppUpdater already uses — and hands the resulting content://
+     * Uri to [onReady] so the caller can launch a share/copy intent. No new
+     * FileProvider path or permission was added. P29 RC3.4.
+     */
+    fun exportInventory(context: Context, onReady: (Uri) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val records = modelManager.getModelsSnapshot().map(ModelArtifactManager::createAuditRecord)
+            val json = buildString {
+                append("[\n")
+                records.forEachIndexed { index, r ->
+                    append("  {\n")
+                    append("    \"modelId\": ${jsonString(r.modelId)},\n")
+                    append("    \"displayName\": ${jsonString(r.displayName)},\n")
+                    append("    \"role\": ${jsonString(r.role)},\n")
+                    append("    \"verificationStatus\": ${jsonString(r.verificationStatus)},\n")
+                    append("    \"resolvedPath\": ${jsonString(r.resolvedPath)},\n")
+                    append("    \"fileExists\": ${r.fileExists},\n")
+                    append("    \"fileSizeBytes\": ${r.fileSizeBytes},\n")
+                    append("    \"sha256Prefix\": ${r.sha256Prefix?.let { jsonString(it) } ?: "null"},\n")
+                    append("    \"ggufMagicValid\": ${r.ggufMagicValid},\n")
+                    append("    \"generalArchitecture\": ${r.generalArchitecture?.let { jsonString(it) } ?: "null"}\n")
+                    append("  }")
+                    append(if (index < records.size - 1) ",\n" else "\n")
+                }
+                append("]\n")
+            }
+
+            val downloadsDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: return@launch
+            downloadsDir.mkdirs()
+            val exportFile = File(downloadsDir, "pocketnode_model_inventory.json")
+            exportFile.writeText(json)
+
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", exportFile
+            )
+            withContext(Dispatchers.Main) { onReady(uri) }
+        }
+    }
+
+    private fun jsonString(value: String): String =
+        "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
     fun rescanModels() {
         viewModelScope.launch(Dispatchers.IO) {
