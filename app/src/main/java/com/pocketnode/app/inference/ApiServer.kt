@@ -235,6 +235,27 @@ object ApiServer {
         return elig.eligible to elig.reason
     }
 
+    /** Read-only snapshot of server/request state, mirroring what `/health` and the
+     * `last_inference_at`/`last_error` fields of `/capabilities` already expose —
+     * added so the in-app Diagnostics screen can show live API state without an
+     * ADB/logcat dependency or an actual loopback HTTP call. */
+    data class ApiStatusSummary(
+        val serverAlive: Boolean,
+        val uptimeMs: Long,
+        val lastInferenceAt: String?,
+        val lastError: String?
+    )
+
+    fun currentStatusSummary(): ApiStatusSummary {
+        val uptime = if (serverStartTime > 0L) System.currentTimeMillis() - serverStartTime else 0L
+        return ApiStatusSummary(
+            serverAlive = isStarted,
+            uptimeMs = uptime,
+            lastInferenceAt = lastInferenceAt,
+            lastError = lastInferenceError
+        )
+    }
+
     fun start(app: MainApplication, port: Int = 11434) {
         if (isStarted || isStopping) return
 

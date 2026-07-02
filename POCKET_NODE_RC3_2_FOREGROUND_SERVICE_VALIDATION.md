@@ -3,7 +3,7 @@
 Date/time: 2026-07-02, 16:36–16:50 local
 Branch: main
 Starting HEAD: c3f6a48 ("P29: serialize Pocket Node model lifecycle")
-Final HEAD: (see final response — inserted after this phase's commit is created)
+Final HEAD: 1478686 ("P29: harden Pocket Node foreground service lifecycle")
 Device: Samsung SM-F956U (Galaxy Z Fold 6), Android 16, serial RFCX60BRDWA
 APK: app/build/outputs/apk/debug/app-debug.apk (debug build)
 

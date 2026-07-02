@@ -33,6 +33,7 @@ fun DiagnosticsScreen(
     val hardware by vm.hardware.collectAsState()
     val models   by vm.models.collectAsState()
     val serviceEvents by vm.serviceEvents.collectAsState()
+    val serviceSnapshot by vm.serviceSnapshot.collectAsState()
     val settings = vm.settingsVm
 
     val threads           by settings.threadCount.collectAsState()
@@ -52,6 +53,51 @@ fun DiagnosticsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = { vm.refreshNow() }) {
+                Text("Refresh now")
+            }
+        }
+
+        // ── Service ────────────────────────────────────────────────────────────
+        DiagCard("Service") {
+            DiagRow(
+                "State", serviceSnapshot.stateLabel,
+                valueColor = serviceStateColor(serviceSnapshot)
+            )
+            DiagRow("Server alive", if (serviceSnapshot.serverAlive) "true" else "false")
+            DiagRow("Uptime", formatUptime(serviceSnapshot.uptimeMs))
+            DiagRow("Active session model", serviceSnapshot.activeSessionModelName ?: "None")
+            DiagRow("Last inference", serviceSnapshot.lastInferenceAt ?: "Not available yet")
+            DiagRow(
+                "Last error", serviceSnapshot.lastError ?: "None",
+                valueColor = if (serviceSnapshot.lastError != null)
+                    Color(0xFFF44336) else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // ── Thermal / Eligibility ──────────────────────────────────────────────
+        DiagCard("Thermal / Eligibility") {
+            DiagRow(
+                "Eligible for inference",
+                if (serviceSnapshot.eligible) "true" else "false",
+                valueColor = if (serviceSnapshot.eligible)
+                    Color(0xFF4CAF50) else Color(0xFFF44336)
+            )
+            DiagRow("Reason", serviceSnapshot.ineligibleReason ?: "—")
+            if (hardware.isLoaded) {
+                DiagRow("Peak OS zone", formatTempC(hardware.peakThermalZoneC, hardware.peakThermalZoneType))
+                DiagRow("Peak CPU zone", formatTempC(hardware.peakCpuZoneC, hardware.peakCpuZoneType))
+                DiagRow("Peak GPU zone", formatTempC(hardware.peakGpuZoneC, hardware.peakGpuZoneType))
+                DiagRow("Battery temp", hardware.batteryTemperatureC?.let { "%.1f°C".format(it) } ?: "Unknown")
+            } else {
+                DiagRow("Thermal zones", "Loading…")
+            }
+        }
+
         // ── A. Engine ──────────────────────────────────────────────────────────
         DiagCard("Engine") {
             val stats = lastInferenceStats
@@ -226,6 +272,31 @@ private fun thermalColor(status: Int): Color = when (status) {
     0, 1 -> Color(0xFF4CAF50) // green — None / Light
     2    -> Color(0xFFFFC107) // amber — Moderate
     else -> Color(0xFFF44336) // red   — Severe and above
+}
+
+@Composable
+private fun serviceStateColor(snapshot: com.pocketnode.app.diagnostics.ServiceSnapshot): Color = when {
+    snapshot.stateLabel == "Serving" -> Color(0xFF4CAF50)       // green
+    snapshot.stateLabel == "Stopped" -> Color(0xFFF44336)       // red
+    snapshot.stateLabel.startsWith("Unavailable") -> Color(0xFFFFC107) // amber
+    else -> MaterialTheme.colorScheme.onSurfaceVariant          // e.g. "Loading model…"
+}
+
+private fun formatUptime(uptimeMs: Long): String {
+    if (uptimeMs <= 0L) return "Not running"
+    val totalSeconds = uptimeMs / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) "%dh %dm %ds".format(hours, minutes, seconds)
+    else if (minutes > 0) "%dm %ds".format(minutes, seconds)
+    else "%ds".format(seconds)
+}
+
+private fun formatTempC(value: Double?, type: String?): String {
+    if (value == null) return "Unknown"
+    val typeSuffix = type?.let { " ($it)" } ?: ""
+    return "%.1f°C%s".format(value, typeSuffix)
 }
 
 private fun formatDiagTime(lastInferenceAtMillis: Long?): String {
