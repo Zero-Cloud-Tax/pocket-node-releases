@@ -113,7 +113,7 @@ files were left exactly as found.
 
 ## Commit
 Commit created: yes
-Commit SHA: 6db3667
+Commit SHA: e7e94f7
 Commit message: `P28: restore Fold6 native optimization baseline for RC2`
 
 ## Follow-up

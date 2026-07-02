@@ -165,7 +165,7 @@ RC2-required fields present, no regression.
 
 ## Checkpoint action
 Commit created: yes
-Commit SHA if yes: (see final response — inserted after commit is created)
+Commit SHA if yes: 2438369
 Files included:
 - `app/src/main/java/com/pocketnode/app/inference/ApiServer.kt`
 - `app/src/main/cpp/pocketnode_jni.cpp`
