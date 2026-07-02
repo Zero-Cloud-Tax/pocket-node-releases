@@ -647,6 +647,8 @@ class ModelsViewModel(
      */
     fun reverifyModel(model: LocalModel) {
         viewModelScope.launch(Dispatchers.IO) {
+            Log.i("PocketNode", "model_reverify_start id=${model.id} name=${model.name}")
+
             val file = File(model.path)
             if (!file.exists()) {
                 modelManager.addModel(
@@ -655,6 +657,7 @@ class ModelsViewModel(
                         lastCheckedAt = System.currentTimeMillis()
                     )
                 )
+                Log.w("PocketNode", "model_reverify_failed id=${model.id} name=${model.name} reason=file_not_found")
                 _statusMessage.value = "Reverify failed for ${model.name}: file not found."
                 return@launch
             }
@@ -674,6 +677,11 @@ class ModelsViewModel(
                         lastCheckedAt = System.currentTimeMillis()
                     )
                 )
+                Log.i(
+                    "PocketNode",
+                    "model_reverify_success id=${model.id} name=${model.name} " +
+                        "status=${artifact.verificationStatus} sha256Prefix=${artifact.sha256.take(16)}"
+                )
                 _statusMessage.value = "Reverified ${model.name}: ${artifact.verificationStatus}"
             }.onFailure { e ->
                 modelManager.addModel(
@@ -682,6 +690,7 @@ class ModelsViewModel(
                         lastCheckedAt = System.currentTimeMillis()
                     )
                 )
+                Log.w("PocketNode", "model_reverify_failed id=${model.id} name=${model.name} reason=${e.message}")
                 _statusMessage.value = "Reverify failed for ${model.name}: ${e.message}"
             }
         }

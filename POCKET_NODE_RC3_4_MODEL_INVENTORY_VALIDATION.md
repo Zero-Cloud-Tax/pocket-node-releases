@@ -3,7 +3,7 @@
 Date/time: 2026-07-02, 17:10–17:25 local
 Branch: main
 Starting HEAD: b38b33e ("P29: improve Pocket Node diagnostics screen")
-Final HEAD: (see final response — inserted after this phase's commit is created)
+Final HEAD: 971084c ("P29: add Pocket Node model inventory UX")
 Device: Samsung SM-F956U (Galaxy Z Fold 6), Android 16, serial RFCX60BRDWA
 APK: app/build/outputs/apk/debug/app-debug.apk (debug build)
 
@@ -109,30 +109,48 @@ only the UI wiring to it is new.
 "done": true}`).
 
 ## Verdict
-**CONDITIONAL**
+**PASS** (updated by RC3.4.1 — see closure section below; originally recorded CONDITIONAL)
 
 - `assembleDebug` passes with no regressions.
 - Export Inventory is fully verified end-to-end: real share sheet, correct file written via the
   existing FileProvider path, valid JSON content pulled and inspected directly.
-- The per-model Reverify button is confirmed present, correctly placed, tappable without
-  crashing, and calls an already-proven validation primitive — but the exact write-back to Room
-  (the specific `sha256`/`verificationStatus`/`lastCheckedAt` persistence after a reverify call)
-  was not independently captured via a direct before/after database read, due to an on-device
-  tooling gap (no `sqlite3` binary, WAL not checkpointed on a plain file pull). This is a
-  verification-completeness gap, not a known or observed defect — CONDITIONAL rather than PASS
-  specifically because that one data point wasn't captured with full rigor, not because
-  anything failed.
+- The per-model Reverify action is now fully verified end-to-end via explicit log evidence and
+  a visible success snackbar (RC3.4.1) — see below.
 - Quarantine/cleanup intentionally reuses existing, already-verified bulk logic per this
   phase's own scope instruction — no new code, no new risk there.
 - No new inference features; no `/health`/`/capabilities`/`/api/generate` schema changes; no
   thermal threshold changes; no native/lifecycle code touched; no Neo/LiteLLM/routing changes;
   no new FileProvider paths or permissions.
 
+## RC3.4.1 Reverify closure
+Date/time: 2026-07-02, 17:55–18:05 local
+Method: added three explicit `Log.i`/`Log.w` lines to `ModelsViewModel.reverifyModel()`
+(`model_reverify_start`, `model_reverify_success` with status + SHA-256 prefix,
+`model_reverify_failed` with reason) under the existing `"PocketNode"` log tag — no change to
+validation semantics, only observability. Rebuilt, reinstalled over the existing app, cleared
+logcat (`adb logcat -c`), tapped the Reverify icon on the draft model
+(`SmolLM2 135M Draft (Q4_0)`) in the live UI, and captured the resulting logcat + on-screen
+snackbar directly.
+Model tested: `SmolLM2 135M Draft (Q4_0)` (id `e8dd8be6-6e85-469d-bacb-ee10cb5b1fac`).
+Evidence: a screenshot captured mid-action shows the snackbar text
+**"Reverified SmolLM2 135M Draft (Q4_0): VERIFIED"** directly on the Model Hub screen.
+Log lines (from `adb logcat -d` after a fresh `logcat -c`):
+```
+07-02 18:04:10.102 22075 22687 I PocketNode: model_reverify_start id=e8dd8be6-6e85-469d-bacb-ee10cb5b1fac name=SmolLM2 135M Draft (Q4_0)
+07-02 18:04:10.240 22075 22687 I PocketNode: model_reverify_success id=e8dd8be6-6e85-469d-bacb-ee10cb5b1fac name=SmolLM2 135M Draft (Q4_0) status=VERIFIED sha256Prefix=bcc3af2849ad6095
+```
+The logged `sha256Prefix=bcc3af2849ad6095` matches, character-for-character, the
+`sha256Prefix` already captured in RC3.4's exported inventory JSON for this same model —
+independent confirmation that the reverify recomputed the correct hash and the two data paths
+(live reverify vs. export snapshot) agree.
+UI result: success snackbar shown; no crash; the model's `VERIFIED` badge remained correct on
+the card afterward.
+API health after: `/health` → `{"status":"ok",...,"model_loaded":true}`; `/capabilities` →
+`eligible_for_inference: true`, unchanged schema. Same process (pid 22075) throughout, no
+restart, no regression.
+Verdict: **PASS**
+
 ## Follow-ups
-- Re-verify the Reverify action's Room persistence with a more direct method next time it's
-  touched — e.g. temporarily push a `sqlite3` binary to the device, or read the `lastCheckedAt`
-  timestamp through a UI surface (the Diagnostics or Model Hub screen doesn't currently display
-  it) rather than only through the DB file.
 - Consider surfacing `lastCheckedAt` in the model card or Model Hub UI, since it's now
   meaningfully updated by Reverify but not shown anywhere.
 - The "Reverify" icon and the card's own `onClick` (select-and-load) sit close together in a
