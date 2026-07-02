@@ -1,0 +1,44 @@
+# Pocket Node — LiteLLM Config Example
+# Redacted. Replace all [PLACEHOLDER] values before use.
+# Mount this file into the LiteLLM container as /app/config.yaml (read-only).
+
+model_list:
+
+  # Tier 1: Fold6 (primary inference node)
+  # The gate uses 'pocket-node-fold6' as the canonical model alias.
+  # This is the alias that triggers thermal + oversize routing logic in the gate.
+  - model_name: pocket-node-fold6
+    litellm_params:
+      model: ollama/[YOUR-MODEL-ID]          # e.g. ollama/smollm3:3.1b-q4_0
+      api_base: http://[FOLD6-TAILSCALE-IP]:11434
+    # Optional: add pocket/fold6 as a convenience alias
+  - model_name: pocket/fold6
+    litellm_params:
+      model: ollama/[YOUR-MODEL-ID]
+      api_base: http://[FOLD6-TAILSCALE-IP]:11434
+
+  # Tier 2: Mac Studio (fallback for oversized / thermal bypass)
+  - model_name: mac-studio-edge-fallback
+    litellm_params:
+      model: ollama/[YOUR-MAC-MODEL-ID]      # e.g. ollama/qwen2.5:14b
+      api_base: http://[MAC-STUDIO-TAILSCALE-IP]:11434
+
+  # Tier 3: Moolah (second fallback if Mac Studio unavailable)
+  - model_name: moolah-edge-fallback
+    litellm_params:
+      model: ollama/[YOUR-MOOLAH-MODEL-ID]
+      api_base: http://[MOOLAH-TAILSCALE-IP]:11434
+
+# Router settings
+# The gate handles primary routing logic (thermal, oversize, tools).
+# LiteLLM handles fallback within each bypass route (Tier 2 -> Tier 3).
+router_settings:
+  routing_strategy: simple-shuffle           # or least-busy
+  num_retries: 2
+  fallbacks:
+    - mac-studio-edge-fallback:
+        - moolah-edge-fallback
+
+litellm_settings:
+  drop_params: true
+  s
