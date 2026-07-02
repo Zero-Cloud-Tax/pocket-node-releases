@@ -20,6 +20,10 @@ object ServiceHealthLog {
         STOP_DRAIN_OK,
         STOP_DRAIN_TIMEOUT,
         NATIVE_FREE_SKIPPED,
+        // P29 RC3.2: operator-triggered stop via the notification action or an
+        // explicit ACTION_STOP_SERVING intent, distinct from the OS/system
+        // stopping the service (e.g. low memory, swipe-away with no wake lock).
+        STOP_ACTION_RECEIVED,
     }
 
     data class ServiceEvent(

@@ -223,6 +223,18 @@ object ApiServer {
      */
     val isContaminated: Boolean get() = contaminated
 
+    /**
+     * Read-only snapshot of current serving eligibility (eligible, reason),
+     * reusing the exact same computation [readEligibility] performs for
+     * `/capabilities` — does not change the HTTP contract in any way.
+     * P29 RC3.2: used by GenerationService's foreground notification to show
+     * a "blocked"/"unavailable" state without duplicating threshold logic.
+     */
+    fun currentEligibility(app: MainApplication): Pair<Boolean, String?> {
+        val elig = readEligibility(app)
+        return elig.eligible to elig.reason
+    }
+
     fun start(app: MainApplication, port: Int = 11434) {
         if (isStarted || isStopping) return
 

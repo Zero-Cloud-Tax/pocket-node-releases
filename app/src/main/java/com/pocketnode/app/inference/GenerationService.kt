@@ -34,7 +34,16 @@ class GenerationService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "pocketnode_edge_api"
         private const val TAG = "PocketNode.ModelLoad"
+
+        // P29 RC3.2: explicit service actions. Default/existing behavior (no
+        // action, or ACTION_START_SERVING) is unchanged from RC3.1 — only a
+        // recognized ACTION_STOP_SERVING changes onStartCommand's behavior.
+        const val ACTION_START_SERVING = "com.pocketnode.app.action.START_SERVING"
+        const val ACTION_STOP_SERVING = "com.pocketnode.app.action.STOP_SERVING"
     }
+
+    /** Coarse, notification-facing lifecycle state — not part of any public API. */
+    private enum class ServingState { STARTING, LOADING_MODEL, SERVING, BLOCKED, STOPPING }
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -53,23 +62,22 @@ class GenerationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as MainApplication
 
-        val tapIntent = Intent(this, MainActivity::class.java).apply {
-            this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        // Any path into onStartCommand must promptly call startForeground() —
+        // including the stop path below, since a stop request may itself have
+        // arrived via startForegroundService (e.g. from the notification action
+        // while the service is already foregrounded, this is a cheap no-op).
+        startForeground(NOTIFICATION_ID, buildNotification(ServingState.STARTING))
+
+        if (intent?.action == ACTION_STOP_SERVING) {
+            ServiceHealthLog.record(EventType.STOP_ACTION_RECEIVED)
+            updateNotification(ServingState.STOPPING)
+            stopSelf(startId)
+            // START_NOT_STICKY: an explicit operator stop must not be immediately
+            // resurrected by the OS the way an OS-initiated kill would be under
+            // START_STICKY.
+            return START_NOT_STICKY
         }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, tapIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Pocket Node Edge API")
-            .setContentText("Running on port 11434 — tap to open app")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
         ServiceHealthLog.record(EventType.SERVICE_STARTED)
         ApiServer.start(app)
 
@@ -80,7 +88,10 @@ class GenerationService : Service() {
         // being null here is not itself a guarantee by the time the launched
         // coroutine actually runs (see P29 RC3.1).
         if (app.activeSession == null) {
+            updateNotification(ServingState.LOADING_MODEL)
             serviceScope.launch { autoLoadModel(app) }
+        } else {
+            refreshNotificationForCurrentEligibility(app)
         }
 
         return START_STICKY
@@ -93,11 +104,15 @@ class GenerationService : Service() {
             // populated activeSession while we were waiting for the lock.
             if (app.activeSession != null) {
                 Log.i(TAG, "model_load_skip_already_active")
+                refreshNotificationForCurrentEligibility(app)
                 return@withLifecycleLock
             }
 
             val model = AppDatabase.getInstance(app).modelDao().getFirstMainModel()
-                ?: return@withLifecycleLock
+            if (model == null) {
+                updateNotification(ServingState.BLOCKED, "No model configured")
+                return@withLifecycleLock
+            }
 
             val prefs = settingsDataStore.data.first()
             val contextSize = prefs[intPreferencesKey("context_size")] ?: 4096
@@ -110,6 +125,7 @@ class GenerationService : Service() {
             val modelPtr = app.inference.nativeLoadModel(model.path, gpuLayers)
             if (modelPtr == 0L) {
                 Log.w(TAG, "model_load_failed reason=native_load_model_failed")
+                updateNotification(ServingState.BLOCKED, "Model failed to load")
                 return@withLifecycleLock
             }
 
@@ -117,6 +133,7 @@ class GenerationService : Service() {
             if (ctxPtr == 0L) {
                 app.inference.nativeFreeModel(modelPtr)
                 Log.w(TAG, "model_load_failed reason=native_create_context_failed")
+                updateNotification(ServingState.BLOCKED, "Model context failed to allocate")
                 return@withLifecycleLock
             }
 
@@ -135,6 +152,17 @@ class GenerationService : Service() {
             ownedCtxPtr = ctxPtr
             app.activeSession = InferenceSession(ctxPtr, model.name)
             Log.i(TAG, "model_load_success model=${model.name}")
+            refreshNotificationForCurrentEligibility(app)
+        }
+    }
+
+    /** Shows SERVING or BLOCKED (with reason) based on the same eligibility ApiServer uses. */
+    private fun refreshNotificationForCurrentEligibility(app: MainApplication) {
+        val (eligible, reason) = ApiServer.currentEligibility(app)
+        if (eligible) {
+            updateNotification(ServingState.SERVING)
+        } else {
+            updateNotification(ServingState.BLOCKED, reason)
         }
     }
 
@@ -187,5 +215,50 @@ class GenerationService : Service() {
         }
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
+    }
+
+    private fun updateNotification(state: ServingState, detail: String? = null) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, buildNotification(state, detail))
+    }
+
+    private fun buildNotification(state: ServingState, detail: String? = null): android.app.Notification {
+        val tapIntent = Intent(this, MainActivity::class.java).apply {
+            this.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val contentPendingIntent = PendingIntent.getActivity(
+            this, 0, tapIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val text = when (state) {
+            ServingState.STARTING -> "Starting Edge API on port 11434…"
+            ServingState.LOADING_MODEL -> "Loading model…"
+            ServingState.SERVING -> "Serving on port 11434 — tap to open app"
+            ServingState.BLOCKED -> "Unavailable" + (detail?.let { ": $it" } ?: "")
+            ServingState.STOPPING -> "Stopping…"
+        }
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Pocket Node Edge API")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(state != ServingState.STOPPING)
+            .setContentIntent(contentPendingIntent)
+
+        // Offer a stop action once actually serving or blocked — not while still
+        // starting/loading/stopping, where it would be either premature or moot.
+        if (state == ServingState.SERVING || state == ServingState.BLOCKED) {
+            val stopIntent = Intent(this, GenerationService::class.java).apply {
+                action = ACTION_STOP_SERVING
+            }
+            val stopPendingIntent = PendingIntent.getService(
+                this, 0, stopIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop serving", stopPendingIntent)
+        }
+
+        return builder.build()
     }
 }
