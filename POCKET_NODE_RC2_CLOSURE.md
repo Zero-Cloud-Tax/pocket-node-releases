@@ -2,8 +2,12 @@
 
 Date/time: 2026-07-02, 15:40 local
 Branch: main
-Closure commit: (see final response — inserted after this phase's evidence commit is created)
-RC2 tag: v0.1.0-rc2
+Closure commit: e2e56cd
+Validated tag: v0.1.0-rc2-p28 → e2e56cd ("P28: close Pocket Node RC2 thermal routing proof") —
+created in Phase 4.1, points at the fully P28-validated commit.
+Original stale tag: v0.1.0-rc2 → 1022444 ("chore: bump version to 0.1.0-rc2") — predates all
+P28 work; NOT moved, per hard rule against moving existing tags. Use `v0.1.0-rc2-p28` for the
+P28-validated state; `v0.1.0-rc2` remains a historical marker only.
 Device: Samsung SM-F956U (Galaxy Z Fold 6), Android 16
 Native baseline: `-march=armv8.4-a+dotprod+i8mm` (Fold6-optimized, restored in Phase 2.6,
 commit e7e94f7)
@@ -13,7 +17,7 @@ APK type: debug (`app-debug.apk`); release build intentionally fails only on mis
 ## Source commits
 - 2438369 — P28: close Pocket Node RC2 API and UTF-8 stability gates
 - e7e94f7 — P28: restore Fold6 native optimization baseline for RC2
-- Phase 3 evidence commit: (see final response)
+- Phase 3 evidence commit: e2e56cd — P28: close Pocket Node RC2 thermal routing proof
 
 ## Gates
 Build: PASS (`assembleDebug`; `assembleRelease` fails only on expected missing HMAC secret)
