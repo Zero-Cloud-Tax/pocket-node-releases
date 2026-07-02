@@ -51,6 +51,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 data class GenerateRequest(
     val prompt: String,
+    val stream: Boolean? = null,
     val max_tokens: Int = 512,
     val temperature: Float = 0.7f,
     val top_p: Float = 0.9f,
@@ -64,6 +65,7 @@ data class ChatMessageRequest(val role: String, val content: String)
 @Serializable
 data class ChatRequest(
     val messages: List<ChatMessageRequest>,
+    val stream: Boolean? = null,
     val max_tokens: Int = 512,
     val temperature: Float = 0.7f,
     val top_p: Float = 0.9f,
@@ -76,6 +78,9 @@ private data class TokenChunk(val token: String)
 
 @Serializable
 private data class DoneChunk(val done: Boolean = true)
+
+@Serializable
+private data class NonStreamGenerateResponse(val response: String, val done: Boolean = true)
 
 @Serializable
 private data class ErrorChunk(val error: String)
@@ -320,7 +325,11 @@ object ApiServer {
                         return@post
                     }
 
-                    streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    if (req.stream == false) {
+                        nonStreamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    } else {
+                        streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    }
                 }
 
                 post("/api/chat") {
@@ -344,7 +353,11 @@ object ApiServer {
                     } else {
                         req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
                     }
-                    streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    if (req.stream == false) {
+                        nonStreamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    } else {
+                        streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                    }
                 }
 
                 post("/v1/chat/completions") {
@@ -460,6 +473,87 @@ object ApiServer {
                     writer.write(json.encodeToString(DoneChunk()) + "\n")
                     writer.flush()
                 }
+            }
+        } finally {
+            inferenceMutex.unlock()
+        }
+    }
+
+    private suspend fun nonStreamResponse(
+        call: ApplicationCall,
+        app: MainApplication,
+        prompt: String,
+        maxTokens: Int,
+        temperature: Float,
+        topP: Float,
+        topK: Int,
+        repeatPenalty: Float
+    ) {
+        if (isStopping) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            return
+        }
+
+        val elig = readEligibility(app)
+        if (!elig.eligible) {
+            call.respond(
+                HttpStatusCode.ServiceUnavailable,
+                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
+            )
+            return
+        }
+
+        val session = app.activeSession
+        if (session == null) {
+            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            return
+        }
+
+        if (!inferenceMutex.tryLock()) {
+            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            return
+        }
+
+        val contentBuilder = StringBuilder()
+        var generationFailed = false
+        try {
+            withContext(Dispatchers.IO) {
+                val callback = object : LlamaCallback {
+                    override fun onToken(token: String) { contentBuilder.append(token) }
+                    override fun onStats(tps: Float, ttftMs: Long, draftAcceptRate: Float,
+                        totalTokens: Int, promptEvalTps: Float, backendName: String,
+                        nDrafted: Int, nAccepted: Int, nCtx: Int, nPast: Int) {}
+                }
+                try {
+                    app.inference.nativeGenerate(
+                        ctxPtr = session.contextPtr,
+                        prompt = prompt,
+                        imageEmbedPtr = 0L,
+                        maxTokens = maxTokens,
+                        temperature = temperature,
+                        topP = topP,
+                        topK = topK,
+                        repeatPenalty = repeatPenalty,
+                        draftCtxPtr = 0L,
+                        nDraft = 0,
+                        batchSize = 512,
+                        ubatchSize = 128,
+                        callback = callback
+                    )
+                    lastInferenceAt = nowIso8601()
+                    lastInferenceError = null
+                } catch (_: Exception) {
+                    lastInferenceError = "generation failed"
+                    generationFailed = true
+                }
+            }
+            if (generationFailed) {
+                call.respond(HttpStatusCode.InternalServerError, "{\"error\":\"generation failed\"}")
+            } else {
+                call.respondText(
+                    json.encodeToString(NonStreamGenerateResponse(contentBuilder.toString())),
+                    ContentType.Application.Json
+                )
             }
         } finally {
             inferenceMutex.unlock()

@@ -19,7 +19,43 @@
 
 #define TAG "PocketNode"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+// Returns the length of the longest prefix of `buf` that consists entirely of
+// complete, valid UTF-8 sequences. Any trailing bytes that are either an
+// incomplete multi-byte sequence (needs more bytes from the next token) or
+// an outright invalid lead/continuation byte are left out of the prefix.
+//
+// P28 Phase 2: llama_token_to_piece() can return a piece whose bytes split a
+// multi-byte UTF-8 character across two tokens. Passing such a partial
+// sequence straight to NewStringUTF() aborts the JVM ("JNI DETECTED ERROR IN
+// APPLICATION: input is not valid Modified UTF-8"). Buffering token bytes and
+// only emitting this valid prefix — see nativeGenerate's emit_token — avoids
+// that abort without changing the text ultimately delivered to callers.
+static size_t utf8_valid_prefix_len(const std::string &buf) {
+    const unsigned char *data = reinterpret_cast<const unsigned char *>(buf.data());
+    size_t len = buf.size();
+    size_t i = 0, last_complete = 0;
+    while (i < len) {
+        unsigned char c = data[i];
+        size_t seq_len;
+        if ((c & 0x80) == 0x00)      seq_len = 1;
+        else if ((c & 0xE0) == 0xC0) seq_len = 2;
+        else if ((c & 0xF0) == 0xE0) seq_len = 3;
+        else if ((c & 0xF8) == 0xF0) seq_len = 4;
+        else break; // invalid lead byte — stop; caller decides how to resync
+        if (i + seq_len > len) break; // incomplete sequence at end of buffer
+        bool valid = true;
+        for (size_t k = 1; k < seq_len; k++) {
+            if ((data[i + k] & 0xC0) != 0x80) { valid = false; break; }
+        }
+        if (!valid) break;
+        i += seq_len;
+        last_complete = i;
+    }
+    return last_complete;
+}
 
 // Inline helpers replacing common_batch_add / common_batch_clear
 static void batch_add(llama_batch &batch, llama_token id, llama_pos pos,
@@ -497,6 +533,11 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
     int  n_drafted_total  = 0;
     long long ttft_ms     = -1LL;
     std::string accumulated;
+    // Per-generation buffer of token bytes not yet confirmed as complete,
+    // valid UTF-8 — see utf8_valid_prefix_len() / P28 Phase 2. Cleared at the
+    // start (fresh std::string per nativeGenerate call) and flushed below
+    // once the decode loop finishes.
+    std::string pending_utf8;
 
     // Returns false when generation should stop (EOG or stop string matched)
     auto emit_token = [&](llama_token tok) -> bool {
@@ -515,10 +556,30 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
             if (accumulated.find(STOP_STRINGS[si]) != std::string::npos) return false;
         }
         if (accumulated.size() > 64) accumulated = accumulated.substr(accumulated.size() - 32);
-        jstring j_tok = env->NewStringUTF(piece.c_str());
-        env->CallVoidMethod(callback, onTokenMethod, j_tok);
-        env->DeleteLocalRef(j_tok);
-        if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+
+        // Only ever hand NewStringUTF a complete, valid UTF-8 prefix. A split
+        // multi-byte character (e.g. Cyrillic/CJK/emoji token boundary) stays
+        // in pending_utf8 until the next token completes it.
+        pending_utf8 += piece;
+        size_t valid_len = utf8_valid_prefix_len(pending_utf8);
+        if (valid_len == 0 && pending_utf8.size() > 4) {
+            // Bigger than any valid UTF-8 sequence and still unresolved —
+            // this is a genuinely invalid lead byte, not just a truncation.
+            // Drop it so the buffer can't stall forever waiting for bytes
+            // that will never arrive.
+            LOGW("Dropping invalid UTF-8 byte 0x%02x from token stream",
+                 (unsigned char)pending_utf8[0]);
+            pending_utf8.erase(0, 1);
+            valid_len = utf8_valid_prefix_len(pending_utf8);
+        }
+        if (valid_len > 0) {
+            std::string emitted = pending_utf8.substr(0, valid_len);
+            pending_utf8.erase(0, valid_len);
+            jstring j_tok = env->NewStringUTF(emitted.c_str());
+            env->CallVoidMethod(callback, onTokenMethod, j_tok);
+            env->DeleteLocalRef(j_tok);
+            if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+        }
         return true;
     };
 
@@ -703,6 +764,28 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeGenerate(
         g_n_past[ctx] = kv_head;
         llama_sampler_free(draft_smpl);
         llama_batch_free(db);
+    }
+
+    // Flush any bytes still held back for UTF-8 completion. Reaching here
+    // means the model won't emit more tokens (EOG/stop/max_tokens/decode
+    // failure), so an incomplete sequence at this point is truncation, not a
+    // transient boundary — emit the Unicode replacement character for it
+    // rather than dropping it silently or ever handing partial bytes to
+    // NewStringUTF.
+    if (!pending_utf8.empty()) {
+        size_t valid_len = utf8_valid_prefix_len(pending_utf8);
+        std::string flush_str = (valid_len == pending_utf8.size())
+            ? pending_utf8
+            : std::string("\xEF\xBF\xBD"); // U+FFFD
+        if (valid_len != pending_utf8.size()) {
+            LOGW("Flushing %zu incomplete/invalid trailing UTF-8 byte(s) at end of generation",
+                 pending_utf8.size() - valid_len);
+        }
+        jstring j_tok = env->NewStringUTF(flush_str.c_str());
+        env->CallVoidMethod(callback, onTokenMethod, j_tok);
+        env->DeleteLocalRef(j_tok);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); }
+        pending_utf8.clear();
     }
 
     // ── Stats reporting ───────────────────────────────────────────────────────
