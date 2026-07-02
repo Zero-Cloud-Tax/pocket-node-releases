@@ -100,7 +100,11 @@ class ChatViewModel(
     private var generationJob: Job? = null
     @Volatile
     private var stopRequested = false
-    private val nativeSessionMutex = Mutex()
+    // P29 RC3.1: shared with GenerationService.autoLoadModel via ModelLoadCoordinator
+    // so a service auto-load can never race this ViewModel's own load/unload/
+    // draft/benchmark native calls. See ModelLoadCoordinator's kdoc for the
+    // ggml_abort race this closes.
+    private val nativeSessionMutex = ModelLoadCoordinator.mutex
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
     private var loadedModelSelection: ResolvedModelSelection? = null

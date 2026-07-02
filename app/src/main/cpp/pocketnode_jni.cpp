@@ -81,6 +81,21 @@ static std::atomic<bool> g_stop_generation{false};
 // from the UI and the Edge API service.
 static std::mutex g_inference_mutex;
 
+// P29 RC3.1: separate mutex serializing model/context lifecycle (load/free)
+// across ALL callers — chat UI (ChatViewModel) and the Edge API service
+// (GenerationService.autoLoadModel) can independently call nativeLoadModel/
+// nativeCreateContext/nativeFreeModel/nativeFreeContext (and their draft-model
+// counterparts). Two such calls racing (e.g. an app-upgrade service restart
+// overlapping a foreground load, or two overlapping service starts) could
+// previously call llama_model_load_from_file/llama_free concurrently with no
+// native-side serialization at all, aborting the process via ggml_abort().
+// This mutex is intentionally separate from g_inference_mutex (which only
+// guards nativeGenerate) so generation is never blocked by a load/unload and
+// vice versa is the only ordering that matters here — lock order is always
+// "acquire g_lifecycle_mutex first" wherever both are taken in the same call,
+// so there is no cross-lock cycle with g_inference_mutex.
+static std::mutex g_lifecycle_mutex;
+
 // Thread-local last error string, readable via nativeGetLastError()
 static thread_local std::string g_last_error;
 
@@ -244,6 +259,8 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadDraftModel(
         JNIEnv *env, jobject /* this */,
         jstring model_path, jint n_gpu_layers) {
 
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
+
     // Backend must already be initialized by the main model load
     const char *path = env->GetStringUTFChars(model_path, nullptr);
     LOGI("Loading draft model: %s (gpu_layers=%d)", path, n_gpu_layers);
@@ -270,6 +287,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadDraftModel(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeDraftModel(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     if (model_ptr != 0) {
         llama_model_free(reinterpret_cast<llama_model *>(model_ptr));
         LOGI("Draft model freed");
@@ -281,6 +299,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateDraftContext(
         JNIEnv * /* env */, jobject /* this */,
         jlong model_ptr, jint context_size, jint n_threads) {
 
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx           = context_size;
@@ -307,6 +326,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateDraftContext(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeDraftContext(
         JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     if (ctx_ptr != 0) {
         llama_context *ctx = reinterpret_cast<llama_context *>(ctx_ptr);
         {
@@ -326,6 +346,8 @@ JNIEXPORT jlong JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
         JNIEnv *env, jobject /* this */,
         jstring model_path, jint n_gpu_layers) {
+
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
 
     std::call_once(g_backend_init_flag, []() {
         LOGI("Initializing llama backend (first model load)");
@@ -364,6 +386,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeLoadModel(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeModel(
         JNIEnv * /* env */, jobject /* this */, jlong model_ptr) {
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     if (model_ptr != 0) {
         llama_model_free(reinterpret_cast<llama_model *>(model_ptr));
         LOGI("Model freed");
@@ -379,6 +402,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateContext(
         JNIEnv * /* env */, jobject /* this */,
         jlong model_ptr, jint context_size, jint n_threads) {
 
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     llama_model *model = reinterpret_cast<llama_model *>(model_ptr);
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx    = context_size;
@@ -405,6 +429,7 @@ Java_com_pocketnode_app_inference_LlamaInference_nativeCreateContext(
 JNIEXPORT void JNICALL
 Java_com_pocketnode_app_inference_LlamaInference_nativeFreeContext(
         JNIEnv * /* env */, jobject /* this */, jlong ctx_ptr) {
+    std::lock_guard<std::mutex> lifecycle_lock(g_lifecycle_mutex);
     if (ctx_ptr != 0) {
         llama_context* ctx = reinterpret_cast<llama_context *>(ctx_ptr);
         {

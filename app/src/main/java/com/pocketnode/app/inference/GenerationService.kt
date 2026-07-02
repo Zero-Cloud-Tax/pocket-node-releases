@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.datastore.preferences.core.intPreferencesKey
 import com.pocketnode.app.InferenceSession
@@ -32,6 +33,7 @@ class GenerationService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "pocketnode_edge_api"
+        private const val TAG = "PocketNode.ModelLoad"
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -73,6 +75,10 @@ class GenerationService : Service() {
 
         if (wakeLock?.isHeld == false) wakeLock?.acquire()
 
+        // Fast-path check only — the authoritative check happens inside
+        // ModelLoadCoordinator's lock in autoLoadModel(), since activeSession
+        // being null here is not itself a guarantee by the time the launched
+        // coroutine actually runs (see P29 RC3.1).
         if (app.activeSession == null) {
             serviceScope.launch { autoLoadModel(app) }
         }
@@ -81,37 +87,55 @@ class GenerationService : Service() {
     }
 
     private suspend fun autoLoadModel(app: MainApplication) {
-        val model = AppDatabase.getInstance(app).modelDao().getFirstMainModel() ?: return
+        ModelLoadCoordinator.withLifecycleLock("service_auto_load") {
+            // Re-check under the lock: another load (this service racing itself
+            // via a second onStartCommand, or the chat UI) may have already
+            // populated activeSession while we were waiting for the lock.
+            if (app.activeSession != null) {
+                Log.i(TAG, "model_load_skip_already_active")
+                return@withLifecycleLock
+            }
 
-        val prefs = settingsDataStore.data.first()
-        val contextSize = prefs[intPreferencesKey("context_size")] ?: 4096
-        val threadCount = prefs[intPreferencesKey("thread_count")]
-            ?: Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
-        val gpuLayers = prefs[intPreferencesKey("gpu_layers")] ?: 0
+            val model = AppDatabase.getInstance(app).modelDao().getFirstMainModel()
+                ?: return@withLifecycleLock
 
-        val modelPtr = app.inference.nativeLoadModel(model.path, gpuLayers)
-        if (modelPtr == 0L) return
+            val prefs = settingsDataStore.data.first()
+            val contextSize = prefs[intPreferencesKey("context_size")] ?: 4096
+            val threadCount = prefs[intPreferencesKey("thread_count")]
+                ?: Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+            val gpuLayers = prefs[intPreferencesKey("gpu_layers")] ?: 0
 
-        val ctxPtr = app.inference.nativeCreateContext(modelPtr, contextSize, threadCount)
-        if (ctxPtr == 0L) {
-            app.inference.nativeFreeModel(modelPtr)
-            return
+            Log.i(TAG, "model_load_start model=${model.name}")
+
+            val modelPtr = app.inference.nativeLoadModel(model.path, gpuLayers)
+            if (modelPtr == 0L) {
+                Log.w(TAG, "model_load_failed reason=native_load_model_failed")
+                return@withLifecycleLock
+            }
+
+            val ctxPtr = app.inference.nativeCreateContext(modelPtr, contextSize, threadCount)
+            if (ctxPtr == 0L) {
+                app.inference.nativeFreeModel(modelPtr)
+                Log.w(TAG, "model_load_failed reason=native_create_context_failed")
+                return@withLifecycleLock
+            }
+
+            // Native calls above can't be cancelled mid-execution. If the scope was
+            // cancelled while they were blocking, free the pointers we just allocated
+            // rather than leaking them, then let the CancellationException propagate.
+            try {
+                currentCoroutineContext().ensureActive()
+            } catch (e: CancellationException) {
+                app.inference.nativeFreeContext(ctxPtr)
+                app.inference.nativeFreeModel(modelPtr)
+                throw e
+            }
+
+            ownedModelPtr = modelPtr
+            ownedCtxPtr = ctxPtr
+            app.activeSession = InferenceSession(ctxPtr, model.name)
+            Log.i(TAG, "model_load_success model=${model.name}")
         }
-
-        // Native calls above can't be cancelled mid-execution. If the scope was
-        // cancelled while they were blocking, free the pointers we just allocated
-        // rather than leaking them, then let the CancellationException propagate.
-        try {
-            currentCoroutineContext().ensureActive()
-        } catch (e: CancellationException) {
-            app.inference.nativeFreeContext(ctxPtr)
-            app.inference.nativeFreeModel(modelPtr)
-            throw e
-        }
-
-        ownedModelPtr = modelPtr
-        ownedCtxPtr = ctxPtr
-        app.activeSession = InferenceSession(ctxPtr, model.name)
     }
 
     override fun onDestroy() {
@@ -126,6 +150,7 @@ class GenerationService : Service() {
         val app = application as MainApplication
 
         if (ownedCtxPtr != 0L) {
+            Log.i(TAG, "model_unload_start")
             // Clear the shared session only if it still points to our context
             // (ChatViewModel may have replaced it with its own loaded model)
             if (app.activeSession?.contextPtr == ownedCtxPtr) {
@@ -134,6 +159,7 @@ class GenerationService : Service() {
             if (drained) {
                 app.inference.nativeFreeContext(ownedCtxPtr)
                 app.inference.nativeFreeModel(ownedModelPtr)
+                Log.i(TAG, "model_unload_success")
             } else {
                 ServiceHealthLog.record(EventType.NATIVE_FREE_SKIPPED,
                     "drain timed out; skipping nativeFreeContext to avoid SIGSEGV")
