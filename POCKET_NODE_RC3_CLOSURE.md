@@ -2,7 +2,7 @@
 
 Date/time: 2026-07-02, 18:25 local
 Branch: main
-Closure commit: (see final response — inserted after this phase's commit is created)
+Closure commit: 9768cbc
 Validated tag: v0.1.0-rc3-p29
 
 ## Baseline
@@ -66,6 +66,9 @@ coded `ACTION_MY_PACKAGE_REPLACED` trigger instead.
 ## Gates
 Build: PASS (`assembleDebug` across every RC3 phase; `assembleRelease` unaffected, still fails
 only on the expected missing HMAC secret per RC2)
+Unit tests: PASS (`testDebugUnitTest`, 63/63, as of the post-closure hygiene commits ending at
+`975ccd6` — a pre-existing compile break in a test fake and four stale test expectations from
+the RC3.3 UX-polish commit were found and fixed; internal-only note, not a public claim)
 Install/upgrade: PASS (verified repeatedly across RC3.1–RC3.5, including 5+8 rapid reinstall
 stress cycles, always preserving model/Room DB data, never requiring an uninstall)
 Health: PASS
@@ -100,3 +103,26 @@ upgrade, cold-start, foreground, diagnostics, model inventory, and API gates pas
 2. Generic ARM64/RK3576 build flavor, optional RC3.6 or later.
 3. Further operator UX polish.
 4. Public release notes if desired.
+
+## Model identity policy
+
+The distinction between filename/hash-registry identity, SHA-256 trust
+anchor, GGUF internal `general.name` metadata, and app display name is
+documented in [docs/pocket-node/model-identity.md](docs/pocket-node/model-identity.md).
+A mismatch between filename/display name and `general.name` is expected and
+does not indicate a verification failure.
+
+## Fresh RC3 benchmark evidence
+
+A fresh benchmark was captured on the Fold6 at commit `ac676e3` (post-RC3-closure
+hygiene commits: test fixes, Operator branding normalization, model-identity
+docs), confirming model verification (`PocketNode_SmolLM3_Q4_0_Fresh`,
+VERIFIED), backend (`Vulkan,OpenCL`), decode TPS ~12.6, prefill TPS ~35.6-36.3,
+TTFT ~331-339ms, and thermal behavior (39.3°C → 44.25°C peak zone, no block).
+Full evidence: [p29_target_rc3_fresh_benchmark_20260705_121201_ac676e3_artifacts/](p29_target_rc3_fresh_benchmark_20260705_121201_ac676e3_artifacts/rc3_benchmark_summary.md).
+
+**Caveat:** these stats are engineering-log evidence read from native logcat
+output, not returned by the API's own JSON responses — `/api/generate` and
+the OAI-compatible endpoints do not currently surface TPS/TTFT/thermal data
+in their HTTP bodies. Making these stats API-visible is deferred /
+nice-to-have for RC3, not a blocker for RC3 proof packaging.
