@@ -1,0 +1,6 @@
+07-05 12:12:00.532  2686  5803 I PocketNode: Prompt tokens=12 max_new=128 spec=OFF n_draft=0 batch=512 ubatch=128
+07-05 12:12:10.996  2686  5803 I PocketNode: Generated 128 tokens in 10.13s (12.6 TPS) | prompt_tps=35.6 ttft=338ms | draft_accept=0.00 drafted=0 accepted=0 | backend=Vulkan,OpenCL
+07-05 12:12:13.263  2686  3006 I PocketNode: Prompt tokens=12 max_new=128 spec=OFF n_draft=0 batch=512 ubatch=128
+07-05 12:12:23.726  2686  3006 I PocketNode: Generated 128 tokens in 10.13s (12.6 TPS) | prompt_tps=36.3 ttft=331ms | draft_accept=0.00 drafted=0 accepted=0 | backend=Vulkan,OpenCL
+07-05 12:12:26.031  2686  2997 I PocketNode: Prompt tokens=12 max_new=128 spec=OFF n_draft=0 batch=512 ubatch=128
+07-05 12:12:36.498  2686  2997 I PocketNode: Generated 128 tokens in 10.13s (12.6 TPS) | prompt_tps=35.6 ttft=339ms | draft_accept=0.00 drafted=0 accepted=0 | backend=Vulkan,OpenCL
