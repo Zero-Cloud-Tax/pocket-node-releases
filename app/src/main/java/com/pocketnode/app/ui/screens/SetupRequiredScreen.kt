@@ -69,7 +69,7 @@ fun SetupRequiredScreen(
                     ) {
                         Icon(Icons.Default.Download, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Download PocketNode Operator")
+                        Text("Download Pocket Node Operator")
                     }
                     Spacer(Modifier.height(12.dp))
                 }
@@ -87,7 +87,7 @@ fun SetupRequiredScreen(
                 is DownloadState.Downloading -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            "Downloading PocketNode Operator",
+                            "Downloading Pocket Node Operator",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

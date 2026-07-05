@@ -357,15 +357,15 @@ object ModelArtifactManager {
         val operatorImport = isPrimaryOperatorIntent(intent)
         if (operatorImport) {
             require(bytesCopied >= MIN_PRIMARY_OPERATOR_BYTES) {
-                "Import rejected: PocketNode Operator artifact is too small (${StorageUtils.formatBytes(bytesCopied)})."
+                "Import rejected: Pocket Node Operator artifact is too small (${StorageUtils.formatBytes(bytesCopied)})."
             }
             require(!inspection.draftSignatureDetected) {
-                "Import rejected: PocketNode Operator import resolved to a draft-family GGUF (${inspection.generalName ?: "unknown"})."
+                "Import rejected: Pocket Node Operator import resolved to a draft-family GGUF (${inspection.generalName ?: "unknown"})."
             }
             val expectedSha256 = intent.expectedSha256 ?: HashUtils.KNOWN_HASHES[PRIMARY_OPERATOR_NAME]
             if (expectedSha256 != null) {
                 require(expectedSha256.equals(sha256, ignoreCase = true)) {
-                    "Import rejected: PocketNode Operator SHA-256 does not match the expected artifact."
+                    "Import rejected: Pocket Node Operator SHA-256 does not match the expected artifact."
                 }
             }
         }

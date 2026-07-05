@@ -9,8 +9,8 @@ class BackendInfoTest {
     @Test
     fun normalizeUsesNativeBackendNameWhenPresent() {
         assertEquals("OpenCL", BackendInfo.normalize(" OpenCL "))
-        assertEquals("CPU", BackendInfo.normalize(null))
-        assertEquals("CPU", BackendInfo.normalize("   "))
+        assertEquals("Unknown", BackendInfo.normalize(null))
+        assertEquals("Unknown", BackendInfo.normalize("   "))
     }
 
     @Test

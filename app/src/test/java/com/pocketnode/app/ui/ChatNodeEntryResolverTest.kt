@@ -77,7 +77,7 @@ class ChatNodeEntryResolverTest {
         assertTrue(decision.redirectsToModelHub)
         assertEquals("selected_main_model_hash_mismatch", decision.reason)
         assertEquals(
-            "Selected chat model does not match the expected PocketNode Operator artifact.",
+            "Selected chat model does not match the expected Pocket Node artifact. Rescan, re-import, or choose another model.",
             decision.userMessage
         )
     }

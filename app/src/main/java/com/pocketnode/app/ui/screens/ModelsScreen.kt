@@ -712,7 +712,7 @@ fun OperatorDownloadCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        spec?.displayName ?: "PocketNode Operator",
+                        spec?.displayName ?: "Pocket Node Operator",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )

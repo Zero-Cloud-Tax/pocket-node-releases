@@ -153,7 +153,7 @@ class ChatViewModelPromptGroundingTest {
         waitFor { viewModel.modelError.value != null }
 
         assertEquals(
-            "Draft model selected for primary chat: SmolLM2 135M Draft (Q4_0). Choose a main model from Chat Models.",
+            "Draft model selected for chat: SmolLM2 135M Draft (Q4_0). Choose a Primary model from Chat Models or move this draft back to the draft slot.",
             viewModel.modelError.value
         )
         assertEquals(0, inference.loadModelCalls)
@@ -185,7 +185,7 @@ class ChatViewModelPromptGroundingTest {
         waitFor { viewModel.modelError.value != null }
 
         assertEquals(
-            "Primary model failed integrity verification: PocketNode_Operator_Q4_0. Re-download or re-import the correct GGUF before chatting.",
+            "Primary model failed verification: PocketNode_Operator_Q4_0. Rescan Model Hub, re-import the GGUF, or select another verified model before chatting.",
             viewModel.modelError.value
         )
         assertEquals(0, inference.loadModelCalls)
@@ -757,6 +757,14 @@ class ChatViewModelPromptGroundingTest {
             }
             entries.sortBy { it.timestamp }
             emitMessages(message.conversationId)
+        }
+
+        override suspend fun deleteMessageById(messageId: Long) {
+            for ((conversationId, entries) in messages) {
+                if (entries.removeAll { it.id == messageId }) {
+                    emitMessages(conversationId)
+                }
+            }
         }
 
         override suspend fun deleteMessagesForConversation(conversationId: Long) {
