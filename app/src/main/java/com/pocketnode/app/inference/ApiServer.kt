@@ -47,6 +47,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import java.util.UUID
 
 @Serializable
 data class GenerateRequest(
@@ -56,7 +58,10 @@ data class GenerateRequest(
     val temperature: Float = 0.7f,
     val top_p: Float = 0.9f,
     val top_k: Int = 40,
-    val repeat_penalty: Float = 1.1f
+    val repeat_penalty: Float = 1.1f,
+    // Hybrid alignment: optional request/session correlation (additive).
+    val requestId: String? = null,
+    val sessionId: String? = null
 )
 
 @Serializable
@@ -70,17 +75,20 @@ data class ChatRequest(
     val temperature: Float = 0.7f,
     val top_p: Float = 0.9f,
     val top_k: Int = 40,
-    val repeat_penalty: Float = 1.1f
+    val repeat_penalty: Float = 1.1f,
+    // Hybrid alignment: optional request/session correlation (additive).
+    val requestId: String? = null,
+    val sessionId: String? = null
 )
 
 @Serializable
 private data class TokenChunk(val token: String)
 
 @Serializable
-private data class DoneChunk(val done: Boolean = true)
+private data class DoneChunk(val done: Boolean = true, val request_id: String? = null)
 
 @Serializable
-private data class NonStreamGenerateResponse(val response: String, val done: Boolean = true)
+private data class NonStreamGenerateResponse(val response: String, val done: Boolean = true, val request_id: String? = null)
 
 @Serializable
 private data class ErrorChunk(val error: String)
@@ -93,7 +101,10 @@ private data class OaiChatRequest(
     val max_tokens: Int? = null,
     val temperature: Float? = null,
     val top_p: Float? = null,
-    val top_k: Int? = null
+    val top_k: Int? = null,
+    // Hybrid alignment: optional request/session correlation (additive).
+    val requestId: String? = null,
+    val sessionId: String? = null
 )
 
 @Serializable
@@ -137,14 +148,55 @@ private data class CapabilitiesResponse(
     // Non-null if the OS-zone gate is the reason inference is blocked/warned
     val thermal_zone_gate_reason: String?,
     // Battery junction temperature from ACTION_BATTERY_CHANGED (null if unavailable)
-    val battery_temperature_c: Double?
+    val battery_temperature_c: Double?,
+    // ── Hybrid alignment: additive machine-readable fields (schema v1) ────────
+    val schema_version: String,
+    val status: String,
+    val reason_code: String?,
+    val model: String?,
+    val backend: String?,
+    val max_prompt_tokens: Int,
+    val max_conversation_turns: Int,
+    val supports_streaming: Boolean,
+    val supports_tools: Boolean,
+    val supports_execution: Boolean,
+    val supports_web_search: Boolean,
+    val busy: Boolean,
+    val app_version: String,
+    val build_version_code: Int
+)
+
+@Serializable
+private data class HealthResponse(
+    // ── Legacy fields (DO NOT rename or remove — backward compat) ─────────────
+    val status: String,
+    val node: String,
+    val device: String,
+    val model_loaded: Boolean,
+    val uptime_ms: Long,
+    // ── Hybrid alignment: additive machine-readable fields (schema v1) ────────
+    val schema_version: String,
+    val readiness: String,
+    val reason_code: String?,
+    val reason: String?,
+    val model: String?,
+    val backend: String?,
+    val thermal_state: String,
+    val busy: Boolean,
+    val app_version: String,
+    val build_version_code: Int,
+    val request_id: String
 )
 
 @Serializable
 private data class NodeUnavailableResponse(
     val error: String,
     val reason: String,
-    val fallback_recommended: Boolean
+    val fallback_recommended: Boolean,
+    // ── Hybrid alignment: additive machine-readable fields ────────────────────
+    val reason_code: String? = null,
+    val retryable: Boolean? = null,
+    val request_id: String? = null
 )
 
 @Serializable
@@ -173,8 +225,39 @@ private data class OaiChatCompletion(
     @SerialName("object") val obj: String,
     val created: Long,
     val model: String,
-    val choices: List<OaiNonStreamChoice>
+    val choices: List<OaiNonStreamChoice>,
+    val request_id: String? = null
 )
+
+/**
+ * Machine-readable refusal reason codes (Hybrid alignment, schema v1).
+ * [httpStatus] and [retryable] are the *recommended* mapping for a reason code seen
+ * in isolation. Pre-existing refusal paths keep their original HTTP status to avoid
+ * an undocumented breaking change for existing consumers — see call sites in
+ * [ApiServer] for where the recommended status is overridden intentionally.
+ */
+enum class ReasonCode(val httpStatus: HttpStatusCode, val retryable: Boolean) {
+    THERMAL_WARNING(HttpStatusCode.OK, true),
+    THERMAL_BLOCK(HttpStatusCode.ServiceUnavailable, true),
+    MODEL_NOT_LOADED(HttpStatusCode.ServiceUnavailable, true),
+    BACKEND_UNAVAILABLE(HttpStatusCode.ServiceUnavailable, true),
+    CONTEXT_TOO_LARGE(HttpStatusCode.PayloadTooLarge, false),
+    CONVERSATION_TOO_LONG(HttpStatusCode.PayloadTooLarge, false),
+    REQUEST_UNSUPPORTED(HttpStatusCode.BadRequest, false),
+    SERVER_BUSY(HttpStatusCode.TooManyRequests, true),
+    BATTERY_LOW(HttpStatusCode.ServiceUnavailable, true),
+    INFERENCE_FAILED(HttpStatusCode.InternalServerError, true),
+    INVALID_REQUEST(HttpStatusCode.BadRequest, false);
+
+    val wireValue: String get() = name.lowercase()
+}
+
+/** Deterministic node-readiness state (Hybrid alignment, schema v1). */
+enum class NodeStatus {
+    READY, DEGRADED, BLOCKED;
+
+    val wireValue: String get() = name.lowercase()
+}
 
 object ApiServer {
 
@@ -182,6 +265,17 @@ object ApiServer {
     // giving up. On timeout the caller skips nativeFreeContext (bounded leak).
     // Increase if you observe frequent STOP_DRAIN_TIMEOUT events during normal use.
     private const val STOP_DRAIN_TIMEOUT_MS = 5_000L
+
+    // ── Hybrid alignment: compatibility contract (schema v1) ───────────────────
+    const val SCHEMA_VERSION = "1"
+    // Approximate routing limits mirrored from the Hybrid fallback chain
+    // (Pocket Node → Mac Studio → Moolah). These are declared capability limits;
+    // enforcing them locally lets Pocket Node fail fast with a structured reason
+    // instead of attempting inference it cannot usefully serve.
+    const val MAX_PROMPT_TOKENS = 2048
+    const val MAX_CONVERSATION_TURNS = 5
+    private val REQUEST_ID_SANITIZE = Regex("[^A-Za-z0-9._-]")
+    private const val MAX_CORRELATION_ID_LENGTH = 128
 
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private val inferenceMutex = Mutex()
@@ -290,9 +384,12 @@ object ApiServer {
 
                 get("/capabilities") {
                     call.response.headers.append("Access-Control-Allow-Origin", "*")
+                    val requestId = resolveRequestId(call, null)
+                    setRequestIdHeaderOnce(call, requestId)
                     val elig = readEligibility(app)
                     val nodeName = Settings.Global.getString(app.contentResolver, "device_name")
                         ?: Build.MODEL
+                    val backend = try { app.inference.nativeGetBackendName() } catch (_: Throwable) { null }
                     call.respondText(
                         json.encodeToString(CapabilitiesResponse(
                             node = nodeName,
@@ -317,7 +414,22 @@ object ApiServer {
                             thermal_zone_readable_count  = elig.thermalZoneReadableCount,
                             thermal_zone_error_count     = elig.thermalZoneErrorCount,
                             thermal_zone_gate_reason     = elig.thermalZoneGateReason,
-                            battery_temperature_c        = elig.batteryTemperatureC
+                            battery_temperature_c        = elig.batteryTemperatureC,
+                            // ── Hybrid alignment ────────────────────────────────
+                            schema_version           = SCHEMA_VERSION,
+                            status                   = elig.status.wireValue,
+                            reason_code              = elig.reasonCode?.wireValue,
+                            model                    = app.activeSession?.modelName,
+                            backend                  = backend,
+                            max_prompt_tokens        = MAX_PROMPT_TOKENS,
+                            max_conversation_turns   = MAX_CONVERSATION_TURNS,
+                            supports_streaming       = true,
+                            supports_tools           = false,
+                            supports_execution       = false,
+                            supports_web_search      = false,
+                            busy                     = inferenceMutex.isLocked,
+                            app_version              = com.pocketnode.app.BuildConfig.VERSION_NAME,
+                            build_version_code       = com.pocketnode.app.BuildConfig.VERSION_CODE
                         )),
                         ContentType.Application.Json
                     )
@@ -325,9 +437,42 @@ object ApiServer {
 
                 get("/health") {
                     call.response.headers.append("Access-Control-Allow-Origin", "*")
-                    val modelLoaded = app.activeSession != null
+                    val requestId = resolveRequestId(call, null)
+                    setRequestIdHeaderOnce(call, requestId)
+                    val elig = readEligibility(app)
                     val uptimeMs = if (serverStartTime > 0L) System.currentTimeMillis() - serverStartTime else 0L
-                    call.respondText("""{"status":"ok","node":"pocket-node","device":"android","model_loaded":$modelLoaded,"uptime_ms":$uptimeMs}""", ContentType.Application.Json)
+                    val backend = try { app.inference.nativeGetBackendName() } catch (_: Throwable) { null }
+                    val thermalState = when {
+                        elig.reasonCode == ReasonCode.THERMAL_BLOCK -> "blocked"
+                        elig.thermalZoneGateReason != null -> "warning"
+                        else -> "normal"
+                    }
+                    call.respondText(
+                        json.encodeToString(
+                            HealthResponse(
+                                // Legacy fields — DO NOT rename/remove. `status` here means
+                                // "process reachable", not inference readiness — see `readiness`.
+                                status = "ok",
+                                node = "pocket-node",
+                                device = "android",
+                                model_loaded = elig.modelLoaded,
+                                uptime_ms = uptimeMs,
+                                // ── Hybrid alignment ────────────────────────────────
+                                schema_version    = SCHEMA_VERSION,
+                                readiness         = elig.status.wireValue,
+                                reason_code       = elig.reasonCode?.wireValue,
+                                reason            = elig.reason,
+                                model             = app.activeSession?.modelName,
+                                backend           = backend,
+                                thermal_state     = thermalState,
+                                busy              = inferenceMutex.isLocked,
+                                app_version       = com.pocketnode.app.BuildConfig.VERSION_NAME,
+                                build_version_code = com.pocketnode.app.BuildConfig.VERSION_CODE,
+                                request_id        = requestId
+                            )
+                        ),
+                        ContentType.Application.Json
+                    )
                 }
 
                 if (com.pocketnode.app.BuildConfig.DEBUG) {
@@ -347,37 +492,81 @@ object ApiServer {
                 post("/api/generate") {
                     call.response.headers.append("Access-Control-Allow-Origin", "*")
                     if (!authorize(call.request.headers[HttpHeaders.Authorization])) {
+                        val requestId = resolveRequestId(call, null)
+                        setRequestIdHeaderOnce(call, requestId)
                         call.respond(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}")
                         return@post
                     }
 
-                    val req = try {
-                        json.decodeFromString<GenerateRequest>(call.receiveText())
-                    } catch (_: Exception) {
-                        call.respond(HttpStatusCode.BadRequest, "{\"error\":\"invalid json body\"}")
+                    val bodyText = call.receiveText()
+                    val unsupportedKey = unsupportedFeatureKey(bodyText)
+                    if (unsupportedKey != null) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(
+                            call, ReasonCode.REQUEST_UNSUPPORTED,
+                            "request field '$unsupportedKey' is not supported — Pocket Node has no tool/function-calling capability",
+                            requestId, httpStatus = HttpStatusCode.BadRequest
+                        )
                         return@post
                     }
+                    val req = try {
+                        json.decodeFromString<GenerateRequest>(bodyText)
+                    } catch (_: Exception) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(call, ReasonCode.INVALID_REQUEST, "invalid json body", requestId, httpStatus = HttpStatusCode.BadRequest)
+                        return@post
+                    }
+                    val requestId = resolveRequestId(call, req.requestId)
+                    val sessionId = resolveSessionId(call, req.sessionId)
+                    ServiceHealthLog.record(EventType.REQUEST_ACCEPTED, "endpoint=/api/generate request_id=$requestId session_id=${sessionId ?: "-"}")
 
                     if (req.stream == false) {
-                        nonStreamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                        nonStreamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
                     } else {
-                        streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                        streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
                     }
                 }
 
                 post("/api/chat") {
                     call.response.headers.append("Access-Control-Allow-Origin", "*")
                     if (!authorize(call.request.headers[HttpHeaders.Authorization])) {
+                        val requestId = resolveRequestId(call, null)
+                        setRequestIdHeaderOnce(call, requestId)
                         call.respond(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}")
                         return@post
                     }
 
-                    val req = try {
-                        json.decodeFromString<ChatRequest>(call.receiveText())
-                    } catch (_: Exception) {
-                        call.respond(HttpStatusCode.BadRequest, "{\"error\":\"invalid json body\"}")
+                    val bodyText = call.receiveText()
+                    val unsupportedKey = unsupportedFeatureKey(bodyText)
+                    if (unsupportedKey != null) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(
+                            call, ReasonCode.REQUEST_UNSUPPORTED,
+                            "request field '$unsupportedKey' is not supported — Pocket Node has no tool/function-calling capability",
+                            requestId, httpStatus = HttpStatusCode.BadRequest
+                        )
                         return@post
                     }
+                    val req = try {
+                        json.decodeFromString<ChatRequest>(bodyText)
+                    } catch (_: Exception) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(call, ReasonCode.INVALID_REQUEST, "invalid json body", requestId, httpStatus = HttpStatusCode.BadRequest)
+                        return@post
+                    }
+                    val requestId = resolveRequestId(call, req.requestId)
+                    val sessionId = resolveSessionId(call, req.sessionId)
+
+                    val turnCount = req.messages.count { it.role == "user" }
+                    if (turnCount > MAX_CONVERSATION_TURNS) {
+                        respondRejection(
+                            call, ReasonCode.CONVERSATION_TOO_LONG,
+                            "conversation has $turnCount user turns, exceeding the $MAX_CONVERSATION_TURNS-turn limit",
+                            requestId
+                        )
+                        return@post
+                    }
+                    ServiceHealthLog.record(EventType.REQUEST_ACCEPTED, "endpoint=/api/chat request_id=$requestId session_id=${sessionId ?: "-"}")
 
                     val chatSession = app.activeSession
                     val prompt = if (chatSession != null) {
@@ -387,25 +576,52 @@ object ApiServer {
                         req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
                     }
                     if (req.stream == false) {
-                        nonStreamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                        nonStreamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
                     } else {
-                        streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty)
+                        streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
                     }
                 }
 
                 post("/v1/chat/completions") {
                     call.response.headers.append("Access-Control-Allow-Origin", "*")
                     if (!authorize(call.request.headers[HttpHeaders.Authorization])) {
+                        val requestId = resolveRequestId(call, null)
+                        setRequestIdHeaderOnce(call, requestId)
                         call.respond(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}")
                         return@post
                     }
 
-                    val req = try {
-                        json.decodeFromString<OaiChatRequest>(call.receiveText())
-                    } catch (_: Exception) {
-                        call.respond(HttpStatusCode.BadRequest, "{\"error\":\"invalid json body\"}")
+                    val bodyText = call.receiveText()
+                    val unsupportedKey = unsupportedFeatureKey(bodyText)
+                    if (unsupportedKey != null) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(
+                            call, ReasonCode.REQUEST_UNSUPPORTED,
+                            "request field '$unsupportedKey' is not supported — Pocket Node has no tool/function-calling capability",
+                            requestId, httpStatus = HttpStatusCode.BadRequest
+                        )
                         return@post
                     }
+                    val req = try {
+                        json.decodeFromString<OaiChatRequest>(bodyText)
+                    } catch (_: Exception) {
+                        val requestId = resolveRequestId(call, null)
+                        respondRejection(call, ReasonCode.INVALID_REQUEST, "invalid json body", requestId, httpStatus = HttpStatusCode.BadRequest)
+                        return@post
+                    }
+                    val requestId = resolveRequestId(call, req.requestId)
+                    val sessionId = resolveSessionId(call, req.sessionId)
+
+                    val turnCount = req.messages.count { it.role == "user" }
+                    if (turnCount > MAX_CONVERSATION_TURNS) {
+                        respondRejection(
+                            call, ReasonCode.CONVERSATION_TOO_LONG,
+                            "conversation has $turnCount user turns, exceeding the $MAX_CONVERSATION_TURNS-turn limit",
+                            requestId
+                        )
+                        return@post
+                    }
+                    ServiceHealthLog.record(EventType.REQUEST_ACCEPTED, "endpoint=/v1/chat/completions request_id=$requestId session_id=${sessionId ?: "-"}")
 
                     val oaiSession = app.activeSession
                     val prompt = if (oaiSession != null) {
@@ -417,10 +633,10 @@ object ApiServer {
                     val topP = req.top_p ?: 0.9f
                     val topK = req.top_k ?: 40
                     if (req.stream == true) {
-                        streamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node")
+                        streamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node", requestId)
                     } else {
                         // stream == false or omitted — return a single complete response object
-                        nonStreamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node")
+                        nonStreamOaiResponse(call, app, prompt, req.max_tokens ?: 512, req.temperature ?: 0.7f, topP, topK, req.model ?: "pocket-node", requestId)
                     }
                 }
             }
@@ -438,30 +654,40 @@ object ApiServer {
         temperature: Float,
         topP: Float,
         topK: Int,
-        repeatPenalty: Float
+        repeatPenalty: Float,
+        requestId: String
     ) {
+        setRequestIdHeaderOnce(call, requestId)
+
         if (isStopping) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            respondRejection(call, ReasonCode.BACKEND_UNAVAILABLE, "server stopping", requestId)
+            return
+        }
+
+        val estimatedTokens = estimateTokenCount(prompt)
+        if (estimatedTokens > MAX_PROMPT_TOKENS) {
+            respondRejection(
+                call, ReasonCode.CONTEXT_TOO_LARGE,
+                "prompt is an estimated $estimatedTokens tokens, exceeding the $MAX_PROMPT_TOKENS-token limit",
+                requestId
+            )
             return
         }
 
         val elig = readEligibility(app)
         if (!elig.eligible) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
-            )
+            respondUnavailable(call, elig, requestId)
             return
         }
 
         val session = app.activeSession
         if (session == null) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            respondRejection(call, ReasonCode.MODEL_NOT_LOADED, "no model loaded", requestId, httpStatus = HttpStatusCode.ServiceUnavailable)
             return
         }
 
         if (!inferenceMutex.tryLock()) {
-            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            respondRejection(call, ReasonCode.SERVER_BUSY, "inference busy — try again shortly", requestId, httpStatus = HttpStatusCode.Conflict)
             return
         }
 
@@ -503,7 +729,7 @@ object ApiServer {
                         writer.write(json.encodeToString(ErrorChunk("generation failed")) + "\n")
                         writer.flush()
                     }
-                    writer.write(json.encodeToString(DoneChunk()) + "\n")
+                    writer.write(json.encodeToString(DoneChunk(request_id = requestId)) + "\n")
                     writer.flush()
                 }
             }
@@ -520,30 +746,40 @@ object ApiServer {
         temperature: Float,
         topP: Float,
         topK: Int,
-        repeatPenalty: Float
+        repeatPenalty: Float,
+        requestId: String
     ) {
+        setRequestIdHeaderOnce(call, requestId)
+
         if (isStopping) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            respondRejection(call, ReasonCode.BACKEND_UNAVAILABLE, "server stopping", requestId)
+            return
+        }
+
+        val estimatedTokens = estimateTokenCount(prompt)
+        if (estimatedTokens > MAX_PROMPT_TOKENS) {
+            respondRejection(
+                call, ReasonCode.CONTEXT_TOO_LARGE,
+                "prompt is an estimated $estimatedTokens tokens, exceeding the $MAX_PROMPT_TOKENS-token limit",
+                requestId
+            )
             return
         }
 
         val elig = readEligibility(app)
         if (!elig.eligible) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
-            )
+            respondUnavailable(call, elig, requestId)
             return
         }
 
         val session = app.activeSession
         if (session == null) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            respondRejection(call, ReasonCode.MODEL_NOT_LOADED, "no model loaded", requestId, httpStatus = HttpStatusCode.ServiceUnavailable)
             return
         }
 
         if (!inferenceMutex.tryLock()) {
-            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            respondRejection(call, ReasonCode.SERVER_BUSY, "inference busy — try again shortly", requestId, httpStatus = HttpStatusCode.Conflict)
             return
         }
 
@@ -581,10 +817,10 @@ object ApiServer {
                 }
             }
             if (generationFailed) {
-                call.respond(HttpStatusCode.InternalServerError, "{\"error\":\"generation failed\"}")
+                respondRejection(call, ReasonCode.INFERENCE_FAILED, "generation failed", requestId, httpStatus = HttpStatusCode.InternalServerError)
             } else {
                 call.respondText(
-                    json.encodeToString(NonStreamGenerateResponse(contentBuilder.toString())),
+                    json.encodeToString(NonStreamGenerateResponse(contentBuilder.toString(), request_id = requestId)),
                     ContentType.Application.Json
                 )
             }
@@ -601,30 +837,40 @@ object ApiServer {
         temperature: Float,
         topP: Float,
         topK: Int,
-        modelId: String
+        modelId: String,
+        requestId: String
     ) {
+        setRequestIdHeaderOnce(call, requestId)
+
         if (isStopping) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            respondRejection(call, ReasonCode.BACKEND_UNAVAILABLE, "server stopping", requestId)
+            return
+        }
+
+        val estimatedTokens = estimateTokenCount(prompt)
+        if (estimatedTokens > MAX_PROMPT_TOKENS) {
+            respondRejection(
+                call, ReasonCode.CONTEXT_TOO_LARGE,
+                "prompt is an estimated $estimatedTokens tokens, exceeding the $MAX_PROMPT_TOKENS-token limit",
+                requestId
+            )
             return
         }
 
         val elig = readEligibility(app)
         if (!elig.eligible) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
-            )
+            respondUnavailable(call, elig, requestId)
             return
         }
 
         val session = app.activeSession
         if (session == null) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            respondRejection(call, ReasonCode.MODEL_NOT_LOADED, "no model loaded", requestId, httpStatus = HttpStatusCode.ServiceUnavailable)
             return
         }
 
         if (!inferenceMutex.tryLock()) {
-            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            respondRejection(call, ReasonCode.SERVER_BUSY, "inference busy — try again shortly", requestId, httpStatus = HttpStatusCode.Conflict)
             return
         }
 
@@ -666,8 +912,9 @@ object ApiServer {
                         writer.write("data: {\"error\":\"generation failed\"}\n\n")
                         writer.flush()
                     }
-                    // Stop chunk: delta must be {} not {"content":null} — safe string interpolation used intentionally
-                    writer.write("data: {\"id\":\"$completionId\",\"object\":\"chat.completion.chunk\",\"created\":$created,\"model\":${json.encodeToString(modelId)},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+                    // Stop chunk: delta must be {} not {"content":null} — safe string interpolation used intentionally.
+                    // request_id is a UUID or a sanitized (alnum/./_/-) correlation id, so no escaping is needed.
+                    writer.write("data: {\"id\":\"$completionId\",\"object\":\"chat.completion.chunk\",\"created\":$created,\"model\":${json.encodeToString(modelId)},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"request_id\":\"$requestId\"}\n\n")
                     writer.write("data: [DONE]\n\n")
                     writer.flush()
                 }
@@ -685,30 +932,40 @@ object ApiServer {
         temperature: Float,
         topP: Float,
         topK: Int,
-        modelId: String
+        modelId: String,
+        requestId: String
     ) {
+        setRequestIdHeaderOnce(call, requestId)
+
         if (isStopping) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"server stopping\"}")
+            respondRejection(call, ReasonCode.BACKEND_UNAVAILABLE, "server stopping", requestId)
+            return
+        }
+
+        val estimatedTokens = estimateTokenCount(prompt)
+        if (estimatedTokens > MAX_PROMPT_TOKENS) {
+            respondRejection(
+                call, ReasonCode.CONTEXT_TOO_LARGE,
+                "prompt is an estimated $estimatedTokens tokens, exceeding the $MAX_PROMPT_TOKENS-token limit",
+                requestId
+            )
             return
         }
 
         val elig = readEligibility(app)
         if (!elig.eligible) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                json.encodeToString(NodeUnavailableResponse("node_unavailable", elig.reason!!, true))
-            )
+            respondUnavailable(call, elig, requestId)
             return
         }
 
         val session = app.activeSession
         if (session == null) {
-            call.respond(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no model loaded\"}")
+            respondRejection(call, ReasonCode.MODEL_NOT_LOADED, "no model loaded", requestId, httpStatus = HttpStatusCode.ServiceUnavailable)
             return
         }
 
         if (!inferenceMutex.tryLock()) {
-            call.respond(HttpStatusCode.Conflict, "{\"error\":\"inference busy — try again shortly\"}")
+            respondRejection(call, ReasonCode.SERVER_BUSY, "inference busy — try again shortly", requestId, httpStatus = HttpStatusCode.Conflict)
             return
         }
 
@@ -741,7 +998,7 @@ object ApiServer {
                 }
             }
             if (generationFailed) {
-                call.respond(HttpStatusCode.InternalServerError, "{\"error\":\"generation failed\"}")
+                respondRejection(call, ReasonCode.INFERENCE_FAILED, "generation failed", requestId, httpStatus = HttpStatusCode.InternalServerError)
             } else {
                 val completion = OaiChatCompletion(
                     id = completionId,
@@ -754,7 +1011,8 @@ object ApiServer {
                             message = OaiNonStreamMessage(role = "assistant", content = contentBuilder.toString()),
                             finish_reason = "stop"
                         )
-                    )
+                    ),
+                    request_id = requestId
                 )
                 call.respondText(json.encodeToString(completion), ContentType.Application.Json)
             }
@@ -790,6 +1048,105 @@ object ApiServer {
         return expectedKey.isBlank() || authHeader == "Bearer $expectedKey"
     }
 
+    // ── Hybrid alignment: request/session correlation ──────────────────────────
+
+    /** Strips control/unsafe characters and bounds length; blank result becomes null. */
+    internal fun sanitizeCorrelationId(raw: String?): String? {
+        val cleaned = raw?.let { REQUEST_ID_SANITIZE.replace(it, "") }?.take(MAX_CORRELATION_ID_LENGTH)
+        return cleaned?.ifBlank { null }
+    }
+
+    /** Uses an incoming X-Request-Id header or body field; generates one if absent/invalid. */
+    private fun resolveRequestId(call: ApplicationCall, bodyRequestId: String?): String {
+        val incoming = call.request.headers["X-Request-Id"] ?: bodyRequestId
+        return sanitizeCorrelationId(incoming) ?: UUID.randomUUID().toString()
+    }
+
+    /** Uses an incoming X-Session-Id header or body field. No session is generated server-side. */
+    private fun resolveSessionId(call: ApplicationCall, bodySessionId: String?): String? {
+        val incoming = call.request.headers["X-Session-Id"] ?: bodySessionId
+        return sanitizeCorrelationId(incoming)
+    }
+
+    /**
+     * Sets X-Request-Id at most once per response. Several call paths (an entry-point
+     * append followed by a shared rejection helper) can both want to set this header for
+     * the same request — appending unconditionally would emit two identical header values.
+     */
+    private fun setRequestIdHeaderOnce(call: ApplicationCall, requestId: String) {
+        if (!call.response.headers.contains("X-Request-Id")) {
+            call.response.headers.append("X-Request-Id", requestId)
+        }
+    }
+
+    /** Rough token estimate (chars/4) — avoids adding a native tokenizer call to the hot path. */
+    internal fun estimateTokenCount(text: String): Int = (text.length / 4).coerceAtLeast(1)
+
+    // ── Hybrid alignment: explicit unsupported-feature rejection ───────────────
+    // supports_tools/supports_execution/supports_web_search are advertised as false;
+    // ignoreUnknownKeys would otherwise silently drop these fields and run plain
+    // inference instead of telling the caller the feature isn't available.
+    private val UNSUPPORTED_REQUEST_FEATURE_KEYS = setOf("tools", "tool_choice", "functions", "function_call")
+
+    /** Returns the first unsupported top-level field name found in the raw JSON body, if any. */
+    internal fun unsupportedFeatureKey(bodyText: String): String? {
+        val obj = try { json.parseToJsonElement(bodyText).jsonObject } catch (_: Exception) { return null }
+        return UNSUPPORTED_REQUEST_FEATURE_KEYS.firstOrNull { obj.containsKey(it) }
+    }
+
+    // ── Hybrid alignment: structured refusal responses ─────────────────────────
+
+    private suspend fun respondRejection(
+        call: ApplicationCall,
+        code: ReasonCode,
+        reason: String,
+        requestId: String,
+        httpStatus: HttpStatusCode = code.httpStatus,
+        fallbackRecommended: Boolean = true
+    ) {
+        setRequestIdHeaderOnce(call, requestId)
+        ServiceHealthLog.record(
+            EventType.REQUEST_REJECTED,
+            "reason_code=${code.wireValue} status=${httpStatus.value} request_id=$requestId"
+        )
+        call.respond(
+            httpStatus,
+            json.encodeToString(
+                NodeUnavailableResponse(
+                    error = code.wireValue,
+                    reason = reason,
+                    fallback_recommended = fallbackRecommended,
+                    reason_code = code.wireValue,
+                    retryable = code.retryable,
+                    request_id = requestId
+                )
+            )
+        )
+    }
+
+    /** Legacy 503 "node unavailable" path (thermal/model/battery gates) — status preserved as-is. */
+    private suspend fun respondUnavailable(call: ApplicationCall, elig: EligibilityResult, requestId: String) {
+        respondRejection(
+            call = call,
+            code = elig.reasonCode ?: ReasonCode.THERMAL_BLOCK,
+            reason = elig.reason ?: "node_unavailable",
+            requestId = requestId,
+            httpStatus = HttpStatusCode.ServiceUnavailable
+        )
+    }
+
+    internal fun reasonCodeFor(reason: String?): ReasonCode? = when (reason) {
+        null -> null
+        "model_not_loaded" -> ReasonCode.MODEL_NOT_LOADED
+        "battery_below_threshold" -> ReasonCode.BATTERY_LOW
+        "thermal_severe",
+        "thermal_zone_hard_block",
+        "thermal_zone_cpu_soft_block",
+        "thermal_zone_gpu_soft_block" -> ReasonCode.THERMAL_BLOCK
+        "debug_forced_block" -> ReasonCode.SERVER_BUSY
+        else -> ReasonCode.REQUEST_UNSUPPORTED
+    }
+
     private data class EligibilityResult(
         // ── Existing fields ───────────────────────────────────────────────────
         val eligible: Boolean,
@@ -809,7 +1166,10 @@ object ApiServer {
         val thermalZoneReadableCount: Int,
         val thermalZoneErrorCount: Int,
         val thermalZoneGateReason: String?,
-        val batteryTemperatureC: Double?
+        val batteryTemperatureC: Double?,
+        // ── Hybrid alignment: deterministic status/reason mapping ──────────────
+        val status: NodeStatus,
+        val reasonCode: ReasonCode?
     )
 
     private fun readEligibility(app: MainApplication): EligibilityResult {
@@ -835,7 +1195,8 @@ object ApiServer {
                 peakCpuZoneC = null, peakCpuZoneType = null,
                 peakGpuZoneC = null, peakGpuZoneType = null,
                 thermalZoneReadableCount = 0, thermalZoneErrorCount = 0,
-                thermalZoneGateReason = null, batteryTemperatureC = batteryTempC
+                thermalZoneGateReason = null, batteryTemperatureC = batteryTempC,
+                status = NodeStatus.BLOCKED, reasonCode = ReasonCode.SERVER_BUSY
             )
         }
 
@@ -889,6 +1250,13 @@ object ApiServer {
             else -> null
         }
 
+        val reasonCode = reasonCodeFor(reason)
+        val status = when {
+            reasonCode != null -> NodeStatus.BLOCKED
+            thermalZoneGateReason != null -> NodeStatus.DEGRADED
+            else -> NodeStatus.READY
+        }
+
         return EligibilityResult(
             eligible = reason == null,
             reason = reason,
@@ -906,7 +1274,9 @@ object ApiServer {
             thermalZoneReadableCount = zoneSnap.readableCount,
             thermalZoneErrorCount    = zoneSnap.errorCount,
             thermalZoneGateReason    = thermalZoneGateReason,
-            batteryTemperatureC      = batteryTempC
+            batteryTemperatureC      = batteryTempC,
+            status = status,
+            reasonCode = reasonCode
         )
     }
 
