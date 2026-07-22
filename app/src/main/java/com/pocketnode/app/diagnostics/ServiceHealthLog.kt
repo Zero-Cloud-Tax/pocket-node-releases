@@ -24,6 +24,10 @@ object ServiceHealthLog {
         // explicit ACTION_STOP_SERVING intent, distinct from the OS/system
         // stopping the service (e.g. low memory, swipe-away with no wake lock).
         STOP_ACTION_RECEIVED,
+        // Hybrid alignment: structured request-correlation trace events.
+        // Detail carries reason_code/status/request_id only — never prompt content.
+        REQUEST_ACCEPTED,
+        REQUEST_REJECTED,
     }
 
     data class ServiceEvent(
