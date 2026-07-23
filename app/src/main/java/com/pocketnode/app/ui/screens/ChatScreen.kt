@@ -4,7 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,6 +22,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -84,12 +84,13 @@ fun ChatScreen(
     onClearChunks: () -> Unit = {},
     onNavigateToKnowledge: (() -> Unit)? = null
 ) {
-    var inputText by remember { mutableStateOf("") }
+    var inputText by rememberSaveable { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachedDocumentText by remember { mutableStateOf<String?>(null) }
     var attachedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var isReadingDocument by remember { mutableStateOf(false) }
     var attachmentWarning by remember { mutableStateOf<String?>(null) }
+    var statusExpanded by rememberSaveable { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -157,8 +158,74 @@ fun ChatScreen(
         if (shouldAutoScroll && totalItems > 0) listState.scrollToItem(totalItems - 1)
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    // Inset ownership for this screen:
+    //  - status bar / top app bar / navigation bar: consumed once by the outer
+    //    MainActivity Scaffold (MainActivity.kt) via its innerPadding, applied to the
+    //    Surface that hosts the NavHost. This screen's own Scaffold zeroes out
+    //    contentWindowInsets so those bars are never accounted for a second time.
+    //  - IME: owned exclusively here, by Modifier.imePadding() on this Scaffold's root
+    //    modifier, which shifts the whole Scaffold (bottomBar + content) above the
+    //    keyboard together. ChatInputBar itself no longer applies imePadding().
+    // Layout invariant: ChatInputBar (plus the knowledge bar) lives in `bottomBar`, so
+    // Scaffold reserves its height before the content slot is measured — no sibling
+    // (status card, banners, loading indicator) can push or clip the composer, in
+    // portrait or landscape, collapsed or expanded.
+    Scaffold(
+        modifier = Modifier.fillMaxSize().imePadding(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        bottomBar = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // ── Knowledge attachment bar ──
+                AnimatedVisibility(visible = attachedChunks.isNotEmpty()) {
+                    KnowledgeBar(
+                        chunks = attachedChunks,
+                        onRemove = onRemoveChunk,
+                        onClearAll = onClearChunks
+                    )
+                }
+
+                // ── Input bar ──
+                ChatInputBar(
+                    text = inputText,
+                    onTextChange = { inputText = it },
+                    onSend = {
+                        var finalPrompt = inputText
+                        if (attachedDocumentText != null) {
+                            finalPrompt = "Context Document ($attachedFileName):\n```\n$attachedDocumentText\n```\n\nUser Query: $inputText"
+                        }
+                        onSendMessage(finalPrompt, attachedImageBytes, 0.7f, 0.9f, 40)
+                        inputText = ""
+                        attachedFileName = null
+                        attachedDocumentText = null
+                        attachedImageBytes = null
+                        attachmentWarning = null
+                    },
+                    isGenerating = isGenerating,
+                    isStopping = isStopping,
+                    onStop = onStopGeneration,
+                    enabled = isModelReady && !isLoadingModel && !isStopping,
+                    onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain", "image/*")) },
+                    attachedFileName = attachedFileName,
+                    onRemoveAttachment = {
+                        attachedFileName = null
+                        attachedDocumentText = null
+                        attachedImageBytes = null
+                        attachmentWarning = null
+                    },
+                    isReadingDocument = isReadingDocument
+                )
+            }
+        }
+    ) { contentPadding ->
+        // Bounded content region: only the message LazyColumn is flexible/scrollable.
+        // If non-scrollable siblings (header, expanded status card, banners) ever
+        // exceed the remaining height, only this region is affected — the composer,
+        // reserved above in bottomBar, is never displaced.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+        ) {
 
             // ── Header row ──
             Row(
@@ -211,7 +278,7 @@ fun ChatScreen(
                 }
             }
 
-            if (isModelReady) {
+            AnimatedVisibility(visible = isModelReady) {
                 InferenceStatusCard(
                     state = InferenceStatusCardState(
                         selectedModelName = modelName,
@@ -223,6 +290,8 @@ fun ChatScreen(
                         lastInferenceAtMillis = lastInferenceAtMillis,
                         modelLoaded = isModelReady
                     ),
+                    expanded = statusExpanded,
+                    onToggleExpanded = { statusExpanded = !statusExpanded },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
                 )
             }
@@ -350,46 +419,6 @@ fun ChatScreen(
                     onDismiss = { onDismissBenchmark?.invoke() }
                 )
             }
-
-            // ── Knowledge attachment bar ──
-            AnimatedVisibility(visible = attachedChunks.isNotEmpty()) {
-                KnowledgeBar(
-                    chunks = attachedChunks,
-                    onRemove = onRemoveChunk,
-                    onClearAll = onClearChunks
-                )
-            }
-
-            // ── Input bar ──
-            ChatInputBar(
-                text = inputText,
-                onTextChange = { inputText = it },
-                onSend = {
-                    var finalPrompt = inputText
-                    if (attachedDocumentText != null) {
-                        finalPrompt = "Context Document ($attachedFileName):\n```\n$attachedDocumentText\n```\n\nUser Query: $inputText"
-                    }
-                    onSendMessage(finalPrompt, attachedImageBytes, 0.7f, 0.9f, 40)
-                    inputText = ""
-                    attachedFileName = null
-                    attachedDocumentText = null
-                    attachedImageBytes = null
-                    attachmentWarning = null
-                },
-                isGenerating = isGenerating,
-                isStopping = isStopping,
-                onStop = onStopGeneration,
-                enabled = isModelReady && !isLoadingModel && !isStopping,
-                onAttach = { documentLauncher.launch(arrayOf("application/pdf", "text/plain", "image/*")) },
-                attachedFileName = attachedFileName,
-                onRemoveAttachment = {
-                    attachedFileName = null
-                    attachedDocumentText = null
-                    attachedImageBytes = null
-                    attachmentWarning = null
-                },
-                isReadingDocument = isReadingDocument
-            )
         }
     }
 }
@@ -409,6 +438,8 @@ fun ChatInputBar(
     onRemoveAttachment: () -> Unit,
     isReadingDocument: Boolean
 ) {
+    // IME padding is owned by the chat-level Scaffold in ChatScreen() (single owner —
+    // not re-applied here to avoid double IME inset).
     Column(modifier = Modifier.fillMaxWidth()) {
         AnimatedVisibility(visible = isStopping) {
             Surface(

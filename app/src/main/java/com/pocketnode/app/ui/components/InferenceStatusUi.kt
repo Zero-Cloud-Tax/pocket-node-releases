@@ -5,10 +5,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -17,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pocketnode.app.data.VerificationStatus
@@ -82,9 +88,12 @@ fun BackendStatusChip(backendName: String) {
 @Composable
 fun InferenceStatusCard(
     state: InferenceStatusCardState,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
+        onClick = onToggleExpanded,
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f)
@@ -95,16 +104,22 @@ fun InferenceStatusCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Always-visible compact summary — kept short so it can never dominate the screen.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
                         text = state.selectedModelName ?: "No model selected",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = if (state.modelLoaded) "Model loaded" else "Model not loaded",
@@ -112,23 +127,36 @@ fun InferenceStatusCard(
                         color = if (state.modelLoaded) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                BackendStatusChip(state.backendName)
+                Row(
+                    modifier = Modifier.padding(start = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    BackendStatusChip(state.backendName)
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse model details" else "Expand model details",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                VerificationStatusBadge(state.verificationStatus)
-                if (state.isPrimaryModel) {
-                    ModelRoleBadge("PRIMARY_MODEL", Color(0xFF1565C0))
+            if (expanded) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VerificationStatusBadge(state.verificationStatus)
+                    if (state.isPrimaryModel) {
+                        ModelRoleBadge("PRIMARY_MODEL", Color(0xFF1565C0))
+                    }
+                    if (state.isDraftModel) {
+                        ModelRoleBadge("DRAFT_MODEL", Color(0xFFB45309))
+                    }
                 }
-                if (state.isDraftModel) {
-                    ModelRoleBadge("DRAFT_MODEL", Color(0xFFB45309))
-                }
-            }
 
-            StatusLine("Resolved file", state.resolvedModelPath ?: "Unavailable", mono = true)
-            StatusLine("Verification", state.verificationStatus ?: "Unknown")
-            StatusLine("Backend", BackendInfo.displayLabel(state.backendName))
-            StatusLine("Last inference", formatInferenceTime(state.lastInferenceAtMillis))
+                StatusLine("Resolved file", state.resolvedModelPath ?: "Unavailable", mono = true)
+                StatusLine("Verification", state.verificationStatus ?: "Unknown")
+                StatusLine("Backend", BackendInfo.displayLabel(state.backendName))
+                StatusLine("Last inference", formatInferenceTime(state.lastInferenceAtMillis))
+            }
         }
     }
 }
@@ -148,7 +176,9 @@ private fun StatusLine(label: String, value: String, mono: Boolean = false) {
             } else {
                 MaterialTheme.typography.bodySmall
             },
-            color = MaterialTheme.colorScheme.onSurface
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
