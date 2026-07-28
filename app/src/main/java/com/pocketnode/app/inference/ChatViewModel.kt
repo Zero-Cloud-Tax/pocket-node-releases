@@ -126,6 +126,16 @@ class ChatViewModel(
         sessionSnapshot.value = sessionManager.snapshot()
     }
 
+    // Guards the (conversationId, restored-session-state) pair as one atomic
+    // unit so a daemon-health observation can never persist a bumped
+    // generation against a conversation other than the one it was actually
+    // bumped for. bindConversation() holds this lock while it restores a new
+    // conversation's session; observeDaemonHealthOnce() holds it while it
+    // reads+persists, so the two can never interleave mid-update.
+    private val sessionBindMutex = Mutex()
+    @Volatile
+    private var sessionBoundConversationId = defaultConversationId
+
     val messages = mutableStateListOf<ChatMessage>()
     val currentConversationId = mutableStateOf(defaultConversationId)
     val isGenerating = mutableStateOf(false)
@@ -261,15 +271,32 @@ class ChatViewModel(
      */
     internal suspend fun observeDaemonHealthOnce() {
         val status = ApiServer.currentStatusSummary()
-        val generationBefore = sessionManager.currentGeneration()
-        val snapshot = sessionManager.onDaemonHealthObserved(status.serverAlive, status.daemonBootId)
-        if (snapshot.generation != generationBefore) {
-            val conversationId = activeConversationId
-            withContext(Dispatchers.IO) {
-                repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
+        applyDaemonHealthObservation(status.serverAlive, status.daemonBootId)
+    }
+
+    private suspend fun applyDaemonHealthObservation(alive: Boolean, bootId: String?) {
+        sessionBindMutex.withLock {
+            val generationBefore = sessionManager.currentGeneration()
+            val snapshot = sessionManager.onDaemonHealthObserved(alive, bootId)
+            if (snapshot.generation != generationBefore) {
+                // sessionBoundConversationId, not activeConversationId: this is the
+                // conversation the generation bump above actually applies to. Held
+                // under the same lock bindConversation() uses, so this can never
+                // read a conversation id whose session hasn't actually been bound yet.
+                val conversationId = sessionBoundConversationId
+                withContext(Dispatchers.IO) {
+                    repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
+                }
             }
         }
         withContext(Dispatchers.Main) { publishSession() }
+    }
+
+    /** Test-only seam: exercises the exact same locked read-generation/
+     * persist-to-bound-conversation path as observeDaemonHealthOnce(), without
+     * depending on the real ApiServer singleton's started/boot-id state. */
+    internal suspend fun observeDaemonHealthForTesting(alive: Boolean, bootId: String?) {
+        applyDaemonHealthObservation(alive, bootId)
     }
 
     fun bindConversation(conversationId: Long) {
@@ -281,7 +308,10 @@ class ChatViewModel(
         messagesJob = viewModelScope.launch {
             repository.ensureConversation(conversationId, defaultTitleForConversation(conversationId))
             val (sessionId, generation) = repository.ensureSessionIdentity(conversationId)
-            sessionManager.restore(sessionId, generation)
+            sessionBindMutex.withLock {
+                sessionManager.restore(sessionId, generation)
+                sessionBoundConversationId = conversationId
+            }
             withContext(Dispatchers.Main) { publishSession() }
             repository.getMessages(conversationId).collectLatest { history ->
                 messages.clear()
@@ -1083,6 +1113,20 @@ class ChatViewModel(
         val requestToken = sessionManager.beginRequest()
         var assistantMsgId: Long? = null
         var completedOk = false
+        // Serializes every write to this request's assistant row — the
+        // periodic autosave and the finally-block's completion/interrupted/
+        // delete write both read-then-write the same row, and without this
+        // they can interleave (a periodic save's write can land between the
+        // finally block's read and its own write, clobbering the interrupted
+        // flag it just set). Scoped to this one send, not shared across it.
+        val messageWriteMutex = Mutex()
+        // A lagging periodic save can still be scheduled but not yet run by
+        // the time this request reaches its final completed/interrupted/
+        // deleted write — isCurrent() alone doesn't catch that, since the
+        // token is still "current" right up through completion. Checked and
+        // set only under messageWriteMutex, so there's no gap between "is
+        // this settled" and the write that settles it.
+        var requestSettled = false
         withContext(Dispatchers.Main) { publishSession() }
 
         try {
@@ -1150,28 +1194,40 @@ class ChatViewModel(
                     val now = System.currentTimeMillis()
 
                     // Throttle UI updates to reduce recomposition and rendering pressure.
+                    // Re-checked inside the posted block too: a stale/superseded
+                    // request's callback can still be unwinding on the native thread
+                    // after a newer request has already started, and must never be
+                    // allowed to overwrite that newer request's visible text.
                     if (now - lastUiUpdateTime > 150) {
                         lastUiUpdateTime = now
                         viewModelScope.launch(Dispatchers.Main) {
-                            currentAssistantMessage.value = sanitized.visibleText
-                            syncVisibleGenerationState()
+                            if (sessionManager.isCurrent(requestToken)) {
+                                currentAssistantMessage.value = sanitized.visibleText
+                                syncVisibleGenerationState()
+                            }
                         }
                     }
 
                     // Periodically persist to DB every 2000ms — skipped once this
                     // request's generation is no longer current (reset, model/backend
-                    // switch, or a newer send already superseded it).
+                    // switch, or a newer send already superseded it). The staleness
+                    // check is re-evaluated again inside the launched coroutine
+                    // immediately before the write, since a reset/stop can land in
+                    // the gap between scheduling this launch and it actually running.
+                    // The write also preserves the row's current persisted state
+                    // (in particular `interrupted`) rather than reconstructing it
+                    // from scratch, and is skipped entirely if the row was already
+                    // deleted or already flagged interrupted by the finally-block
+                    // cleanup of a stop/reset that raced ahead of this save.
                     if (now - lastDbSaveTime > 2000 && sessionManager.isCurrent(requestToken)) {
                         lastDbSaveTime = now
                         viewModelScope.launch(Dispatchers.IO) {
-                            repository.updateMessage(
-                                ChatMessage(
-                                    id = placeholderId,
-                                    conversationId = conversationId,
-                                    role = "assistant",
-                                    content = sanitized.visibleText
-                                )
-                            )
+                            messageWriteMutex.withLock {
+                                if (requestSettled || !sessionManager.isCurrent(requestToken)) return@withLock
+                                val current = repository.getMessage(placeholderId) ?: return@withLock
+                                if (current.interrupted) return@withLock
+                                repository.updateMessage(current.copy(content = sanitized.visibleText))
+                            }
                         }
                     }
                 }
@@ -1264,14 +1320,17 @@ class ChatViewModel(
             // the finally block below handles that when completedOk is false.
             completedOk = !stopRequested && sessionManager.markCompleted(requestToken)
             if (completedOk) {
-                repository.updateMessage(
-                    ChatMessage(
-                        id = placeholderId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = finalAssistantOutput.visibleText
+                messageWriteMutex.withLock {
+                    repository.updateMessage(
+                        ChatMessage(
+                            id = placeholderId,
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = finalAssistantOutput.visibleText
+                        )
                     )
-                )
+                    requestSettled = true
+                }
                 logInfo(
                     "Chat persistence[assistant]: conversationId=$conversationId finalAssistantPreview=\"${preview(finalAssistantOutput.visibleText)}\" savedVisible=true"
                 )
@@ -1307,19 +1366,22 @@ class ChatViewModel(
                 if (!completedOk) {
                     val msgId = assistantMsgId
                     if (msgId != null) {
-                        val current = repository.getMessage(msgId)
-                        if (current != null) {
-                            if (current.content.isBlank()) {
-                                repository.deleteMessage(current.id)
-                                logInfo(
-                                    "Stop recovery: removed empty assistant placeholder id=$msgId conversationId=$conversationId"
-                                )
-                            } else {
-                                repository.updateMessage(current.copy(interrupted = true))
-                                logInfo(
-                                    "Stop recovery: flagged partial assistant message id=$msgId interrupted=true conversationId=$conversationId"
-                                )
+                        messageWriteMutex.withLock {
+                            val current = repository.getMessage(msgId)
+                            if (current != null) {
+                                if (current.content.isBlank()) {
+                                    repository.deleteMessage(current.id)
+                                    logInfo(
+                                        "Stop recovery: removed empty assistant placeholder id=$msgId conversationId=$conversationId"
+                                    )
+                                } else {
+                                    repository.updateMessage(current.copy(interrupted = true))
+                                    logInfo(
+                                        "Stop recovery: flagged partial assistant message id=$msgId interrupted=true conversationId=$conversationId"
+                                    )
+                                }
                             }
+                            requestSettled = true
                         }
                     }
                     sessionManager.markInterrupted(requestToken)
@@ -1457,12 +1519,20 @@ class ChatViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val interrupted = repository.getMessage(interruptedMessageId)
             if (interrupted == null || interrupted.role != "assistant") return@launch
-            val lastUser = repository.getMessagesSnapshot(conversationId).lastOrNull { it.role == "user" }
-            if (lastUser == null) return@launch
+            // Resolve the user turn immediately preceding this specific interrupted
+            // fragment by conversation order, not the newest user message overall —
+            // a conversation can contain an older interrupted response with more
+            // turns after it, and retrying that older fragment must resend the
+            // prompt it was actually answering.
+            val history = repository.getMessagesSnapshot(conversationId)
+            val interruptedIndex = history.indexOfFirst { it.id == interruptedMessageId }
+            if (interruptedIndex <= 0) return@launch
+            val precedingUser = history.subList(0, interruptedIndex).lastOrNull { it.role == "user" }
+            if (precedingUser == null) return@launch
             repository.deleteMessage(interruptedMessageId)
             withContext(Dispatchers.Main) {
                 sendMessage(
-                    text = lastUser.content,
+                    text = precedingUser.content,
                     conversationId = conversationId,
                     skipUserMessageSave = true
                 )
