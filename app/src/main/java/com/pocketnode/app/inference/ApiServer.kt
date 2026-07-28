@@ -34,6 +34,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.pocketnode.app.session.AcceptanceState
+import com.pocketnode.app.session.DaemonSessionRegistry
+import com.pocketnode.app.session.SessionAcceptance
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -61,7 +64,16 @@ data class GenerateRequest(
     val repeat_penalty: Float = 1.1f,
     // Hybrid alignment: optional request/session correlation (additive).
     val requestId: String? = null,
-    val sessionId: String? = null
+    val sessionId: String? = null,
+    // ── Session hardening: additive request-generation enforcement fields ──
+    // A client that omits these is treated as stateless — never as resumed.
+    val context_generation: Int? = null,
+    val request_sequence: Long? = null,
+    // The daemon_boot_id this client last observed for this sessionId, if
+    // any. A mismatch against the daemon's current boot id means the client
+    // is asserting continuity with an instance that no longer exists.
+    val daemon_boot_id: String? = null,
+    val model_fingerprint: String? = null
 )
 
 @Serializable
@@ -78,17 +90,42 @@ data class ChatRequest(
     val repeat_penalty: Float = 1.1f,
     // Hybrid alignment: optional request/session correlation (additive).
     val requestId: String? = null,
-    val sessionId: String? = null
+    val sessionId: String? = null,
+    // ── Session hardening: additive request-generation enforcement fields ──
+    val context_generation: Int? = null,
+    val request_sequence: Long? = null,
+    val daemon_boot_id: String? = null,
+    val model_fingerprint: String? = null
 )
 
 @Serializable
 private data class TokenChunk(val token: String)
 
 @Serializable
-private data class DoneChunk(val done: Boolean = true, val request_id: String? = null)
+private data class DoneChunk(
+    val done: Boolean = true,
+    val request_id: String? = null,
+    // ── Session hardening: additive fields, echoed only when the request
+    // carried session metadata to validate (null for stateless callers) ──
+    val session_id: String? = null,
+    val context_generation: Int? = null,
+    val request_sequence: Long? = null,
+    val daemon_boot_id: String? = null,
+    val session_acceptance: String? = null
+)
 
 @Serializable
-private data class NonStreamGenerateResponse(val response: String, val done: Boolean = true, val request_id: String? = null)
+private data class NonStreamGenerateResponse(
+    val response: String,
+    val done: Boolean = true,
+    val request_id: String? = null,
+    // ── Session hardening: additive fields, see DoneChunk ──
+    val session_id: String? = null,
+    val context_generation: Int? = null,
+    val request_sequence: Long? = null,
+    val daemon_boot_id: String? = null,
+    val session_acceptance: String? = null
+)
 
 @Serializable
 private data class ErrorChunk(val error: String)
@@ -254,7 +291,16 @@ enum class ReasonCode(val httpStatus: HttpStatusCode, val retryable: Boolean) {
     SERVER_BUSY(HttpStatusCode.TooManyRequests, true),
     BATTERY_LOW(HttpStatusCode.ServiceUnavailable, true),
     INFERENCE_FAILED(HttpStatusCode.InternalServerError, true),
-    INVALID_REQUEST(HttpStatusCode.BadRequest, false);
+    INVALID_REQUEST(HttpStatusCode.BadRequest, false),
+    // ── Session hardening: additive reason codes ───────────────────────────
+    // Client's context_generation is behind what this daemon already accepted.
+    SESSION_STALE_GENERATION(HttpStatusCode.Conflict, true),
+    // Client's request_sequence was not greater than the last one accepted.
+    SESSION_OUT_OF_ORDER(HttpStatusCode.Conflict, true),
+    // Client declared a model identity that doesn't match this session's.
+    SESSION_MODEL_MISMATCH(HttpStatusCode.Conflict, false),
+    // Client asserted continuity with a daemon instance that no longer exists.
+    SESSION_STALE_DAEMON(HttpStatusCode.Conflict, true);
 
     val wireValue: String get() = name.lowercase()
 }
@@ -295,6 +341,12 @@ object ApiServer {
     // (foreground service recreated, process killed and relaunched, etc.)
     // even when the app process itself survives across the restart.
     @Volatile private var bootId: String = UUID.randomUUID().toString()
+    private val sessionRegistry = DaemonSessionRegistry()
+
+    /** Current daemon boot id — clients (and in-process callers like
+     * ChatViewModel's SessionManager) compare this across observations to
+     * detect a restart without needing a real network round trip. */
+    fun currentBootId(): String = bootId
     private val serverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cachedApiKey = MutableStateFlow("")
     private var keyCollectorJob: Job? = null
@@ -348,7 +400,10 @@ object ApiServer {
         val serverAlive: Boolean,
         val uptimeMs: Long,
         val lastInferenceAt: String?,
-        val lastError: String?
+        val lastError: String?,
+        // Null when the server isn't running — callers must not treat a
+        // null boot id as "unchanged from last time", only as "unknown".
+        val daemonBootId: String?
     )
 
     fun currentStatusSummary(): ApiStatusSummary {
@@ -357,7 +412,8 @@ object ApiServer {
             serverAlive = isStarted,
             uptimeMs = uptime,
             lastInferenceAt = lastInferenceAt,
-            lastError = lastInferenceError
+            lastError = lastInferenceError,
+            daemonBootId = if (isStarted) bootId else null
         )
     }
 
@@ -365,6 +421,7 @@ object ApiServer {
         if (isStarted || isStopping) return
 
         bootId = UUID.randomUUID().toString()
+        sessionRegistry.reset()
         keyCollectorJob?.cancel()
         keyCollectorJob = serverScope.launch {
             app.settingsDataStore.data
@@ -534,10 +591,23 @@ object ApiServer {
                     val sessionId = resolveSessionId(call, req.sessionId)
                     ServiceHealthLog.record(EventType.REQUEST_ACCEPTED, "endpoint=/api/generate request_id=$requestId session_id=${sessionId ?: "-"}")
 
+                    val acceptance = sessionRegistry.evaluate(
+                        sessionId = sessionId,
+                        clientGeneration = req.context_generation,
+                        clientSequence = req.request_sequence,
+                        clientDaemonBootId = req.daemon_boot_id,
+                        currentDaemonBootId = bootId,
+                        modelFingerprint = req.model_fingerprint
+                    )
+                    if (!acceptance.state.isAccepted) {
+                        respondSessionRejection(call, acceptance, requestId)
+                        return@post
+                    }
+
                     if (req.stream == false) {
-                        nonStreamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
+                        nonStreamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId, acceptance)
                     } else {
-                        streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
+                        streamResponse(call, app, req.prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId, acceptance)
                     }
                 }
 
@@ -582,6 +652,19 @@ object ApiServer {
                     }
                     ServiceHealthLog.record(EventType.REQUEST_ACCEPTED, "endpoint=/api/chat request_id=$requestId session_id=${sessionId ?: "-"}")
 
+                    val acceptance = sessionRegistry.evaluate(
+                        sessionId = sessionId,
+                        clientGeneration = req.context_generation,
+                        clientSequence = req.request_sequence,
+                        clientDaemonBootId = req.daemon_boot_id,
+                        currentDaemonBootId = bootId,
+                        modelFingerprint = req.model_fingerprint
+                    )
+                    if (!acceptance.state.isAccepted) {
+                        respondSessionRejection(call, acceptance, requestId)
+                        return@post
+                    }
+
                     val chatSession = app.activeSession
                     val prompt = if (chatSession != null) {
                         val meta = app.inference.nativeGetModelMetadata(chatSession.contextPtr)
@@ -590,9 +673,9 @@ object ApiServer {
                         req.messages.joinToString("\n") { "${it.role}: ${it.content}" }
                     }
                     if (req.stream == false) {
-                        nonStreamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
+                        nonStreamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId, acceptance)
                     } else {
-                        streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId)
+                        streamResponse(call, app, prompt, req.max_tokens, req.temperature, req.top_p, req.top_k, req.repeat_penalty, requestId, acceptance)
                     }
                 }
 
@@ -669,7 +752,8 @@ object ApiServer {
         topP: Float,
         topK: Int,
         repeatPenalty: Float,
-        requestId: String
+        requestId: String,
+        acceptance: SessionAcceptance? = null
     ) {
         setRequestIdHeaderOnce(call, requestId)
 
@@ -743,7 +827,18 @@ object ApiServer {
                         writer.write(json.encodeToString(ErrorChunk("generation failed")) + "\n")
                         writer.flush()
                     }
-                    writer.write(json.encodeToString(DoneChunk(request_id = requestId)) + "\n")
+                    writer.write(
+                        json.encodeToString(
+                            DoneChunk(
+                                request_id = requestId,
+                                session_id = acceptance?.sessionId,
+                                context_generation = acceptance?.generation,
+                                request_sequence = acceptance?.sequence,
+                                daemon_boot_id = if (acceptance != null) bootId else null,
+                                session_acceptance = acceptance?.state?.name?.lowercase()
+                            )
+                        ) + "\n"
+                    )
                     writer.flush()
                 }
             }
@@ -761,7 +856,8 @@ object ApiServer {
         topP: Float,
         topK: Int,
         repeatPenalty: Float,
-        requestId: String
+        requestId: String,
+        acceptance: SessionAcceptance? = null
     ) {
         setRequestIdHeaderOnce(call, requestId)
 
@@ -834,7 +930,17 @@ object ApiServer {
                 respondRejection(call, ReasonCode.INFERENCE_FAILED, "generation failed", requestId, httpStatus = HttpStatusCode.InternalServerError)
             } else {
                 call.respondText(
-                    json.encodeToString(NonStreamGenerateResponse(contentBuilder.toString(), request_id = requestId)),
+                    json.encodeToString(
+                        NonStreamGenerateResponse(
+                            response = contentBuilder.toString(),
+                            request_id = requestId,
+                            session_id = acceptance?.sessionId,
+                            context_generation = acceptance?.generation,
+                            request_sequence = acceptance?.sequence,
+                            daemon_boot_id = if (acceptance != null) bootId else null,
+                            session_acceptance = acceptance?.state?.name?.lowercase()
+                        )
+                    ),
                     ContentType.Application.Json
                 )
             }
@@ -1133,6 +1239,55 @@ object ApiServer {
                     reason_code = code.wireValue,
                     retryable = code.retryable,
                     request_id = requestId
+                )
+            )
+        )
+    }
+
+    /** Session-metadata rejection (stale generation, out-of-order sequence,
+     * model mismatch, or continuity claimed across a daemon restart) — never
+     * silently accepted, and always echoes enough for the client to recover:
+     * the daemon's current boot id and, where known, the generation it
+     * actually has on file for this session. */
+    private suspend fun respondSessionRejection(
+        call: ApplicationCall,
+        acceptance: SessionAcceptance,
+        requestId: String
+    ) {
+        val code = when (acceptance.state) {
+            AcceptanceState.STALE_GENERATION -> ReasonCode.SESSION_STALE_GENERATION
+            AcceptanceState.OUT_OF_ORDER_SEQUENCE -> ReasonCode.SESSION_OUT_OF_ORDER
+            AcceptanceState.MODEL_MISMATCH -> ReasonCode.SESSION_MODEL_MISMATCH
+            AcceptanceState.STALE_DAEMON_BOOT -> ReasonCode.SESSION_STALE_DAEMON
+            else -> ReasonCode.INVALID_REQUEST
+        }
+        val reason = when (acceptance.state) {
+            AcceptanceState.STALE_GENERATION ->
+                "context_generation ${acceptance.generation} is behind this daemon's accepted generation — reset the client session"
+            AcceptanceState.OUT_OF_ORDER_SEQUENCE ->
+                "request_sequence was not greater than the last one this daemon accepted for this session"
+            AcceptanceState.MODEL_MISMATCH ->
+                "declared model identity does not match this session's tracked model — context compatibility cannot be guaranteed"
+            AcceptanceState.STALE_DAEMON_BOOT ->
+                "session was tied to a previous daemon instance — this daemon has restarted since; start a new session"
+            else -> "session metadata rejected"
+        }
+        setRequestIdHeaderOnce(call, requestId)
+        ServiceHealthLog.record(
+            EventType.REQUEST_REJECTED,
+            "reason_code=${code.wireValue} status=${code.httpStatus.value} request_id=$requestId session_acceptance=${acceptance.state.name.lowercase()}"
+        )
+        call.respond(
+            code.httpStatus,
+            json.encodeToString(
+                DoneChunk(
+                    done = true,
+                    request_id = requestId,
+                    session_id = acceptance.sessionId,
+                    context_generation = acceptance.generation,
+                    request_sequence = acceptance.sequence,
+                    daemon_boot_id = bootId,
+                    session_acceptance = acceptance.state.name.lowercase()
                 )
             )
         )

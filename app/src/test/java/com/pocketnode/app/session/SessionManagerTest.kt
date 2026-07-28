@@ -131,6 +131,7 @@ class SessionManagerTest {
 
         assertTrue(changed)
         assertEquals(SessionState.RESET_REQUIRED, manager.currentState())
+        assertEquals(1, manager.currentGeneration())
     }
 
     @Test
@@ -140,6 +141,76 @@ class SessionManagerTest {
         val changed = manager.onDaemonBootIdObserved("boot-1")
         assertFalse(changed)
         assertEquals(SessionState.IDLE, manager.currentState())
+        assertEquals(0, manager.currentGeneration())
+    }
+
+    // 1. First observation of a boot id must not invalidate a fresh session.
+    @Test
+    fun onDaemonBootIdObserved_firstObservation_doesNotInvalidateFreshSession() {
+        val manager = SessionManager()
+        val changed = manager.onDaemonBootIdObserved("boot-1")
+        assertFalse(changed)
+        assertEquals(SessionState.IDLE, manager.currentState())
+        assertEquals(0, manager.currentGeneration())
+        assertEquals("boot-1", manager.currentDaemonBootId())
+    }
+
+    // 5. Daemon boot-ID change moves the session to reset-required.
+    @Test
+    fun onDaemonHealthObserved_newBootId_movesToResetRequiredAndBumpsGeneration() {
+        val manager = SessionManager()
+        manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+
+        val snapshot = manager.onDaemonHealthObserved(alive = true, bootId = "boot-2")
+
+        assertEquals(SessionState.RESET_REQUIRED, snapshot.state)
+        assertEquals(1, snapshot.generation)
+        assertEquals(ConnectionStatus.CONNECTED, snapshot.connectionStatus)
+    }
+
+    // 6. Repeated identical boot ID is a no-op.
+    @Test
+    fun onDaemonHealthObserved_repeatedSameBootId_isNoOp() {
+        val manager = SessionManager()
+        manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+        val genBefore = manager.currentGeneration()
+
+        val snapshot = manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+
+        assertEquals(SessionState.IDLE, snapshot.state)
+        assertEquals(genBefore, snapshot.generation)
+    }
+
+    // 7. Health failure followed by recovery with the SAME boot id does not invalidate context.
+    @Test
+    fun onDaemonHealthObserved_transientFailureThenRecoverySameBootId_doesNotInvalidate() {
+        val manager = SessionManager()
+        manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+        val genBefore = manager.currentGeneration()
+
+        val duringFailure = manager.onDaemonHealthObserved(alive = false, bootId = null)
+        assertEquals(ConnectionStatus.RECONNECTING, duringFailure.connectionStatus)
+        assertEquals(SessionState.IDLE, duringFailure.state) // not falsely marked reset-required
+
+        val afterRecovery = manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+
+        assertEquals(ConnectionStatus.CONNECTED, afterRecovery.connectionStatus)
+        assertEquals(SessionState.IDLE, afterRecovery.state)
+        assertEquals(genBefore, afterRecovery.generation)
+    }
+
+    // 8. Health recovery with a NEW boot id does invalidate context.
+    @Test
+    fun onDaemonHealthObserved_recoveryWithNewBootId_doesInvalidate() {
+        val manager = SessionManager()
+        manager.onDaemonHealthObserved(alive = true, bootId = "boot-1")
+        manager.onDaemonHealthObserved(alive = false, bootId = null) // outage
+
+        val afterRecovery = manager.onDaemonHealthObserved(alive = true, bootId = "boot-2")
+
+        assertEquals(SessionState.RESET_REQUIRED, afterRecovery.state)
+        assertEquals(1, afterRecovery.generation)
+        assertEquals(ConnectionStatus.CONNECTED, afterRecovery.connectionStatus)
     }
 
     // 10. Interrupted stream does not become a completed assistant message
@@ -173,6 +244,20 @@ class SessionManagerTest {
         assertTrue(second.sequence > first.sequence)
         assertEquals(first.sessionId, second.sessionId)
         assertEquals(first.generation, second.generation)
+    }
+
+    // 4. Completion from request N cannot overwrite request N+1 — same
+    // session AND generation, but request N+1 (e.g. a retry) supersedes N.
+    @Test
+    fun isCurrent_rejectsOlderSequenceWithinSameGenerationOnceANewerRequestStarted() {
+        val manager = SessionManager()
+        val requestN = manager.beginRequest()
+        val requestNPlus1 = manager.beginRequest() // e.g. retry, same session/generation
+
+        assertFalse("request N must be stale once N+1 has started", manager.isCurrent(requestN))
+        assertTrue(manager.isCurrent(requestNPlus1))
+        assertFalse(manager.markCompleted(requestN))
+        assertTrue(manager.markCompleted(requestNPlus1))
     }
 
     // 12. Old session cannot overwrite the active conversation.

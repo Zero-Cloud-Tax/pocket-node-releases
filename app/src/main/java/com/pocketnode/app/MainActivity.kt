@@ -537,7 +537,9 @@ class MainActivity : ComponentActivity() {
                                     onClearChunks = { chatVm.clearAttachedChunks() },
                                     onNavigateToKnowledge = { navController.navigate("knowledge") },
                                     sessionSnapshot = chatVm.sessionSnapshot.value,
-                                    onResetSession = { chatVm.resetSessionContext(conversationId) }
+                                    onResetSession = { chatVm.resetSessionContext(conversationId) },
+                                    onRetryInterrupted = { messageId -> chatVm.retryInterrupted(conversationId, messageId) },
+                                    onDismissInterrupted = { messageId -> chatVm.dismissInterrupted(messageId) }
                                 )
                             }
 

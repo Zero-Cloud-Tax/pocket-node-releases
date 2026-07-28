@@ -10,6 +10,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,13 +24,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,7 +90,13 @@ fun parseThinking(content: String): ParsedMessage {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean = true) {
+fun ChatBubble(
+    message: ChatMessage,
+    renderMarkdown: Boolean = true,
+    onRetry: (() -> Unit)? = null,
+    onDismiss: (() -> Unit)? = null,
+    retryEnabled: Boolean = true
+) {
     val isUser = message.role == "user"
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val clipboardManager = LocalClipboardManager.current
@@ -92,8 +104,16 @@ fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean = true) {
     val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
     val timeLabel = remember(message.timestamp) { timeFormat.format(Date(message.timestamp)) }
     var showThought by remember { mutableStateOf(false) }
-    val bubbleColor = if (isUser) Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)))
-    else Brush.linearGradient(listOf(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.secondaryContainer))
+    // Interrupted assistant fragments get a visually distinct, muted
+    // treatment — never the same solid bubble as a completed answer, so it
+    // never reads as a normal finished response.
+    val bubbleColor = when {
+        message.interrupted -> Brush.linearGradient(
+            listOf(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f), MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f))
+        )
+        isUser -> Brush.linearGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)))
+        else -> Brush.linearGradient(listOf(MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.secondaryContainer))
+    }
     val shape = if (isUser) RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp) else RoundedCornerShape(20.dp, 20.dp, 20.dp, 4.dp)
 
     Column(horizontalAlignment = alignment) {
@@ -126,9 +146,35 @@ fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean = true) {
                     }
                 }
 
+                if (message.interrupted) {
+                    Row(
+                        modifier = Modifier.padding(bottom = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.WarningAmber,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            "Interrupted — incomplete response",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
                 if (parsed.text.isNotBlank() || parsed.thought == null) {
                     Box(
-                        modifier = Modifier.widthIn(max = 280.dp).clip(shape).background(bubbleColor)
+                        modifier = Modifier.widthIn(max = 280.dp).clip(shape)
+                            .then(
+                                if (message.interrupted) {
+                                    Modifier.border(BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)), shape)
+                                } else Modifier
+                            )
+                            .background(bubbleColor)
                             .combinedClickable(onClick = {}, onLongClick = { clipboardManager.setText(AnnotatedString(parsed.text)) })
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
@@ -138,6 +184,28 @@ fun ChatBubble(message: ChatMessage, renderMarkdown: Boolean = true) {
                             Text(parsed.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSecondaryContainer)
                         } else {
                             Text(parsed.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                }
+
+                if (message.interrupted && (onRetry != null || onDismiss != null)) {
+                    Row(
+                        modifier = Modifier.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (onRetry != null) {
+                            TextButton(onClick = onRetry, enabled = retryEnabled) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Retry", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                        if (onDismiss != null) {
+                            TextButton(onClick = onDismiss) {
+                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Dismiss", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }

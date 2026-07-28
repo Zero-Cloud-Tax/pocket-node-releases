@@ -45,6 +45,7 @@ import com.pocketnode.app.ui.components.InferenceStatusCard
 import com.pocketnode.app.ui.components.InferenceStatusCardState
 import com.pocketnode.app.ui.components.MarkdownText
 import com.pocketnode.app.ui.components.TypingIndicator
+import com.pocketnode.app.session.ConnectionStatus
 import com.pocketnode.app.session.SessionSnapshot
 import com.pocketnode.app.session.SessionState
 import kotlinx.coroutines.launch
@@ -86,7 +87,9 @@ fun ChatScreen(
     onClearChunks: () -> Unit = {},
     onNavigateToKnowledge: (() -> Unit)? = null,
     sessionSnapshot: SessionSnapshot? = null,
-    onResetSession: (() -> Unit)? = null
+    onResetSession: (() -> Unit)? = null,
+    onRetryInterrupted: ((Long) -> Unit)? = null,
+    onDismissInterrupted: ((Long) -> Unit)? = null
 ) {
     var inputText by rememberSaveable { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
@@ -240,7 +243,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClearChat) {
-                    Icon(Icons.Default.Delete, contentDescription = "Clear Chat",
+                    Icon(Icons.Default.Delete, contentDescription = "New chat (deletes this conversation's history)",
                         tint = MaterialTheme.colorScheme.error)
                 }
 
@@ -394,7 +397,16 @@ fun ChatScreen(
                 }
 
                 items(displayMessages, key = { it.id }) { message ->
-                    ChatBubble(message)
+                    if (message.role == "assistant" && message.interrupted) {
+                        ChatBubble(
+                            message = message,
+                            onRetry = onRetryInterrupted?.let { retry -> { retry(message.id) } },
+                            onDismiss = onDismissInterrupted?.let { dismiss -> { dismiss(message.id) } },
+                            retryEnabled = !isGenerating
+                        )
+                    } else {
+                        ChatBubble(message)
+                    }
                 }
                 if (isGenerating && currentAssistantMessage.isNotEmpty()) {
                     item {
@@ -857,12 +869,13 @@ private fun SessionStatusChip(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val shortId = snapshot.sessionId.take(8)
-    val (label, color) = when (snapshot.state) {
-        SessionState.RESET_REQUIRED -> "Reset required" to MaterialTheme.colorScheme.error
-        SessionState.STALE -> "Session stale" to MaterialTheme.colorScheme.error
-        SessionState.INTERRUPTED -> "Interrupted" to MaterialTheme.colorScheme.tertiary
-        SessionState.SENDING, SessionState.STREAMING -> "Session $shortId · active" to MaterialTheme.colorScheme.primary
-        SessionState.COMPLETED, SessionState.IDLE -> "Session $shortId" to MaterialTheme.colorScheme.onSurfaceVariant
+    val (label, color) = when {
+        snapshot.connectionStatus == ConnectionStatus.RECONNECTING -> "Reconnecting…" to MaterialTheme.colorScheme.tertiary
+        snapshot.state == SessionState.RESET_REQUIRED -> "Reset required — daemon restarted" to MaterialTheme.colorScheme.error
+        snapshot.state == SessionState.STALE -> "Session stale" to MaterialTheme.colorScheme.error
+        snapshot.state == SessionState.INTERRUPTED -> "Interrupted" to MaterialTheme.colorScheme.tertiary
+        snapshot.state == SessionState.SENDING || snapshot.state == SessionState.STREAMING -> "Session $shortId · active" to MaterialTheme.colorScheme.primary
+        else -> "Session $shortId" to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Box(modifier = modifier) {
         AssistChip(
@@ -872,7 +885,7 @@ private fun SessionStatusChip(
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text("Reset session context") },
+                text = { Text("Reset context (keeps history)") },
                 onClick = {
                     expanded = false
                     onResetSession()

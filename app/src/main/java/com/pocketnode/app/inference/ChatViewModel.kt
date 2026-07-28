@@ -29,6 +29,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -83,6 +84,10 @@ class ChatViewModel(
         private const val VISION_PROJECTOR_FILE_NAME = "mmproj-model-f16.gguf"
         const val MAX_ATTACHED_CHUNKS = 5
         private const val RESPONSE_RESERVE_TOKENS = 512
+        // In-process status read only (ApiServer.currentStatusSummary), not a
+        // network call — kept slow deliberately so this never becomes a
+        // wasteful polling loop.
+        private const val DAEMON_HEALTH_POLL_INTERVAL_MS = 8000L
     }
 
     private var modelPtr = 0L
@@ -238,6 +243,33 @@ class ChatViewModel(
     init {
         bindConversation(defaultConversationId)
         backendName.value = try { BackendInfo.normalize(inference.nativeGetBackendName()) } catch (_: Throwable) { "CPU" }
+        viewModelScope.launch {
+            while (true) {
+                observeDaemonHealthOnce()
+                delay(DAEMON_HEALTH_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * Reuses ApiServer's existing in-process status read (the same one
+     * DiagnosticsViewModel already polls) — no new network/HTTP loop. A
+     * boot id change moves the session to RESET_REQUIRED and is persisted
+     * immediately so it survives even if the app is killed before the next
+     * send; an unreachable/not-yet-started daemon only flips the connection
+     * indicator to RECONNECTING, never invalidates context by itself.
+     */
+    internal suspend fun observeDaemonHealthOnce() {
+        val status = ApiServer.currentStatusSummary()
+        val generationBefore = sessionManager.currentGeneration()
+        val snapshot = sessionManager.onDaemonHealthObserved(status.serverAlive, status.daemonBootId)
+        if (snapshot.generation != generationBefore) {
+            val conversationId = activeConversationId
+            withContext(Dispatchers.IO) {
+                repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
+            }
+        }
+        withContext(Dispatchers.Main) { publishSession() }
     }
 
     fun bindConversation(conversationId: Long) {
@@ -943,7 +975,8 @@ class ChatViewModel(
         batchSize: Int = 512,
         ubatchSize: Int = 128,
         benchmarkMode: Boolean = false,
-        serviceStateSummary: String? = null
+        serviceStateSummary: String? = null,
+        skipUserMessageSave: Boolean = false
     ) {
         val priorGenerationJob = generationJob
         generationJob = viewModelScope.launch(Dispatchers.IO) {
@@ -974,7 +1007,8 @@ class ChatViewModel(
                 batchSize = batchSize,
                 ubatchSize = ubatchSize,
                 benchmarkMode = benchmarkMode,
-                serviceStateSummary = serviceStateSummary
+                serviceStateSummary = serviceStateSummary,
+                skipUserMessageSave = skipUserMessageSave
             )
         }
     }
@@ -995,7 +1029,8 @@ class ChatViewModel(
         batchSize: Int = 512,
         ubatchSize: Int = 128,
         benchmarkMode: Boolean = false,
-        serviceStateSummary: String? = null
+        serviceStateSummary: String? = null,
+        skipUserMessageSave: Boolean = false
     ) {
         val trimmedText = text.trim()
         if (trimmedText.isBlank() || isGenerating.value) return
@@ -1058,11 +1093,13 @@ class ChatViewModel(
                 repository.clearConversation(conversationId)
             }
 
-            repository.saveMessage(
-                ChatMessage(conversationId = conversationId, role = "user", content = trimmedText)
-            )
+            if (!skipUserMessageSave) {
+                repository.saveMessage(
+                    ChatMessage(conversationId = conversationId, role = "user", content = trimmedText)
+                )
+            }
             logInfo(
-                "Chat persistence[user]: rawUserMessage=\"${preview(trimmedText)}\" savedVisible=true conversationId=$conversationId"
+                "Chat persistence[user]: rawUserMessage=\"${preview(trimmedText)}\" savedVisible=${!skipUserMessageSave} conversationId=$conversationId"
             )
 
             withContext(Dispatchers.Main) {
@@ -1365,7 +1402,19 @@ class ChatViewModel(
         }
     }
 
+    /** "New chat" — genuinely new session identity (see [SessionManager.newSession]).
+     * If a generation is actively streaming into this same conversation, it is
+     * cancelled first: without this, the old generationJob would keep
+     * isGenerating=true after the clear, blocking the user from sending into
+     * the fresh conversation, and would keep the native context locked until
+     * it finished on its own. The old response is still protected from
+     * landing in the new conversation independently by SessionManager's
+     * generation check (newSession changes sessionId/generation, so the old
+     * request's token is stale even if cancellation doesn't land in time). */
     fun clearChat(conversationId: Long) {
+        if (conversationId == activeConversationId && isGenerating.value) {
+            stopGeneration()
+        }
         viewModelScope.launch(Dispatchers.IO) {
             if (contextPtr != 0L && conversationId == activeConversationId) {
                 inference.nativeClearCache(contextPtr)
@@ -1381,6 +1430,42 @@ class ChatViewModel(
                 }
                 currentAssistantMessage.value = ""
                 isGenerating.value = false
+            }
+        }
+    }
+
+    /** Removes only an interrupted assistant fragment — never the user prompt
+     * that preceded it, never the rest of the conversation. */
+    fun dismissInterrupted(messageId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val message = repository.getMessage(messageId)
+            if (message != null && message.role == "assistant" && message.interrupted) {
+                repository.deleteMessage(messageId)
+            }
+        }
+    }
+
+    /**
+     * Re-runs generation for the user turn that preceded an interrupted
+     * assistant message, without duplicating that user turn. Uses a fresh
+     * request sequence (SessionManager.beginRequest), so a late completion
+     * from the original attempt can never overwrite this one — see
+     * SessionManager.isCurrent. Disabled by callers while isGenerating.
+     */
+    fun retryInterrupted(conversationId: Long, interruptedMessageId: Long) {
+        if (isGenerating.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val interrupted = repository.getMessage(interruptedMessageId)
+            if (interrupted == null || interrupted.role != "assistant") return@launch
+            val lastUser = repository.getMessagesSnapshot(conversationId).lastOrNull { it.role == "user" }
+            if (lastUser == null) return@launch
+            repository.deleteMessage(interruptedMessageId)
+            withContext(Dispatchers.Main) {
+                sendMessage(
+                    text = lastUser.content,
+                    conversationId = conversationId,
+                    skipUserMessageSave = true
+                )
             }
         }
     }
