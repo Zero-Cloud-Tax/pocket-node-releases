@@ -126,15 +126,71 @@ class ChatViewModel(
         sessionSnapshot.value = sessionManager.snapshot()
     }
 
-    // Guards the (conversationId, restored-session-state) pair as one atomic
-    // unit so a daemon-health observation can never persist a bumped
-    // generation against a conversation other than the one it was actually
-    // bumped for. bindConversation() holds this lock while it restores a new
-    // conversation's session; observeDaemonHealthOnce() holds it while it
-    // reads+persists, so the two can never interleave mid-update.
+    // One immutable snapshot of "which conversation's session is currently
+    // loaded into sessionManager" — conversationId, sessionId, and generation
+    // always change together, under sessionBindMutex, as a single unit.
+    // activeConversationId/currentConversationId (below) are UI-display
+    // fields only; they are NOT a safe source of "which conversation's
+    // session is actually loaded" for any operation that mutates or persists
+    // session state — every such operation must go through
+    // ensureBoundToConversation() instead, which reconciles against this.
+    private data class ConversationBinding(
+        val conversationId: Long,
+        val sessionId: String,
+        val generation: Int,
+        val bindVersion: Long
+    )
+
     private val sessionBindMutex = Mutex()
+    private val bindVersionCounter = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile
-    private var sessionBoundConversationId = defaultConversationId
+    private var currentBinding = ConversationBinding(
+        conversationId = defaultConversationId,
+        sessionId = sessionManager.currentSessionId(),
+        generation = sessionManager.currentGeneration(),
+        bindVersion = 0L
+    )
+
+    /**
+     * Ensures sessionManager/currentBinding actually reflect [conversationId]
+     * before a session-mutating operation (send, reset, retry, model switch)
+     * proceeds, and returns the binding it must use. Never trusts
+     * activeConversationId or sessionManager's ambient state on its own:
+     * - If a bind is already in progress or was superseded for this exact
+     *   conversationId, this independently (re)establishes it.
+     * - The version is captured *before* any suspending work, so ordering
+     *   reflects when the caller's intent started, not when it happened to
+     *   finish — a bind/operation that started earlier can never clobber one
+     *   that started later, no matter which suspends longer (requirements:
+     *   newer bind supersedes an older suspended one; a late-completing
+     *   older bind can never replace a newer active one).
+     */
+    private suspend fun ensureBoundToConversation(conversationId: Long): ConversationBinding {
+        val myVersion = bindVersionCounter.incrementAndGet()
+        val (sessionId, generation) = repository.ensureSessionIdentity(conversationId)
+        return sessionBindMutex.withLock {
+            if (myVersion < currentBinding.bindVersion) {
+                // A newer bind/operation already won this race; if it happens
+                // to already be for the same conversation+session, use it as-is
+                // rather than pointlessly re-restoring. If it's for a
+                // different conversation entirely, this call has been
+                // superseded and must not proceed — but every caller checks
+                // the returned binding's conversationId against its own
+                // intended conversationId before mutating anything, so a
+                // mismatched result here is caught by that check.
+                currentBinding
+            } else {
+                if (currentBinding.conversationId != conversationId ||
+                    currentBinding.sessionId != sessionId ||
+                    currentBinding.generation != generation
+                ) {
+                    sessionManager.restore(sessionId, generation)
+                }
+                currentBinding = ConversationBinding(conversationId, sessionId, generation, myVersion)
+                currentBinding
+            }
+        }
+    }
 
     val messages = mutableStateListOf<ChatMessage>()
     val currentConversationId = mutableStateOf(defaultConversationId)
@@ -275,18 +331,26 @@ class ChatViewModel(
     }
 
     private suspend fun applyDaemonHealthObservation(alive: Boolean, bootId: String?) {
+        // Capture what to persist under the lock, then release it before the
+        // (slow, suspending) DB write — the lock only needs to protect the
+        // read-generation/currentBinding-update step, not the persistence.
+        var toPersist: Triple<Long, String, Int>? = null
         sessionBindMutex.withLock {
             val generationBefore = sessionManager.currentGeneration()
             val snapshot = sessionManager.onDaemonHealthObserved(alive, bootId)
             if (snapshot.generation != generationBefore) {
-                // sessionBoundConversationId, not activeConversationId: this is the
-                // conversation the generation bump above actually applies to. Held
-                // under the same lock bindConversation() uses, so this can never
-                // read a conversation id whose session hasn't actually been bound yet.
-                val conversationId = sessionBoundConversationId
-                withContext(Dispatchers.IO) {
-                    repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
-                }
+                // currentBinding.conversationId, not activeConversationId: this is
+                // the conversation the generation bump above actually applies to.
+                // Read under the same lock bindConversation()/ensureBoundToConversation()
+                // use, so this can never read a conversation id whose session
+                // hasn't actually been bound yet.
+                currentBinding = currentBinding.copy(generation = snapshot.generation)
+                toPersist = Triple(currentBinding.conversationId, snapshot.sessionId, snapshot.generation)
+            }
+        }
+        toPersist?.let { (conversationId, sessionId, generation) ->
+            withContext(Dispatchers.IO) {
+                repository.persistSessionState(conversationId, sessionId, generation)
             }
         }
         withContext(Dispatchers.Main) { publishSession() }
@@ -302,16 +366,20 @@ class ChatViewModel(
     fun bindConversation(conversationId: Long) {
         if (activeConversationId == conversationId && messagesJob != null) return
 
+        // activeConversationId/currentConversationId here are UI-display
+        // fields only (which conversation's messages/composer are shown) —
+        // they are set eagerly for a responsive switch. The actual session
+        // authority (sessionManager + currentBinding) is reconciled below via
+        // ensureBoundToConversation(), which every session-mutating operation
+        // also goes through, so nothing can act on session state for this
+        // conversation before it's genuinely bound, regardless of what
+        // activeConversationId already reads.
         activeConversationId = conversationId
         currentConversationId.value = conversationId
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
             repository.ensureConversation(conversationId, defaultTitleForConversation(conversationId))
-            val (sessionId, generation) = repository.ensureSessionIdentity(conversationId)
-            sessionBindMutex.withLock {
-                sessionManager.restore(sessionId, generation)
-                sessionBoundConversationId = conversationId
-            }
+            ensureBoundToConversation(conversationId)
             withContext(Dispatchers.Main) { publishSession() }
             repository.getMessages(conversationId).collectLatest { history ->
                 messages.clear()
@@ -326,15 +394,32 @@ class ChatViewModel(
      * Reset context within the current conversation: clears the model's KV
      * cache and bumps the session generation so any request/response already
      * in flight is treated as stale, but keeps the same sessionId and chat
-     * history. Idempotent — see SessionManager.resetSession.
+     * history. Idempotent — see SessionManager.resetSession. Refuses to touch
+     * sessionManager if, by the time this runs, a newer bind/operation has
+     * taken over the session for a different conversation.
      */
     fun resetSessionContext(conversationId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
+            val binding = ensureBoundToConversation(conversationId)
+            if (binding.conversationId != conversationId) return@launch
+
             if (contextPtr != 0L && conversationId == activeConversationId) {
                 inference.nativeClearCache(contextPtr)
             }
-            val snapshot = sessionManager.resetSession()
-            repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
+
+            var toPersist: Pair<String, Int>? = null
+            sessionBindMutex.withLock {
+                // Re-verify immediately before the mutation: still the exact
+                // binding this call resolved, not superseded in the meantime.
+                if (currentBinding.bindVersion == binding.bindVersion) {
+                    val snapshot = sessionManager.resetSession()
+                    currentBinding = currentBinding.copy(generation = snapshot.generation)
+                    toPersist = snapshot.sessionId to snapshot.generation
+                }
+            }
+            toPersist?.let { (sessionId, generation) ->
+                repository.persistSessionState(conversationId, sessionId, generation)
+            }
             withContext(Dispatchers.Main) { publishSession() }
         }
     }
@@ -1095,22 +1180,42 @@ class ChatViewModel(
         lastBatchSize = batchSize
         lastUbatchSize = ubatchSize
 
-        // Resolve this conversation's persisted session identity, detect a
-        // model/backend switch since it was last used, and mint a request
-        // token this send must present before its response may be persisted.
-        // Late responses from a stale generation are discarded, not applied.
-        val (persistedSessionId, persistedGeneration) = repository.ensureSessionIdentity(conversationId)
-        if (sessionManager.currentSessionId() != persistedSessionId) {
-            sessionManager.restore(persistedSessionId, persistedGeneration)
+        // Resolve this conversation's persisted session identity through the
+        // single shared binding path (not an ad hoc restore here) — this is
+        // what closes the "Send during a conversation switch uses the wrong
+        // conversation's UUID/generation" race: ensureBoundToConversation()
+        // independently (re)establishes the binding for *this* conversationId
+        // regardless of whatever bindConversation()/another operation is
+        // concurrently doing, and a version check below refuses to proceed if
+        // something else already won this conversation for a different one.
+        val binding = ensureBoundToConversation(conversationId)
+        if (binding.conversationId != conversationId) {
+            modelError.value = modelError.value
+                ?: "Conversation is still switching — please try sending again."
+            return
         }
         val fingerprintChanged = sessionManager.onModelOrBackendChanged(loadedModelPath, backendName.value)
         if (fingerprintChanged) {
+            sessionBindMutex.withLock {
+                if (currentBinding.bindVersion == binding.bindVersion) {
+                    currentBinding = currentBinding.copy(generation = sessionManager.currentGeneration())
+                }
+            }
             repository.persistSessionState(conversationId, sessionManager.currentSessionId(), sessionManager.currentGeneration())
             logInfo(
                 "Session: model/backend changed since last use of conversationId=$conversationId — generation now ${sessionManager.currentGeneration()}"
             )
         }
-        val requestToken = sessionManager.beginRequest()
+        // Mint the request token only if this call still owns the exact
+        // binding it resolved above — the last check before a real state
+        // mutation (dirty=true/state=SENDING) happens.
+        val requestToken = sessionBindMutex.withLock {
+            if (currentBinding.bindVersion != binding.bindVersion) null else sessionManager.beginRequest()
+        } ?: run {
+            modelError.value = modelError.value
+                ?: "Conversation is still switching — please try sending again."
+            return
+        }
         var assistantMsgId: Long? = null
         var completedOk = false
         // Serializes every write to this request's assistant row — the
@@ -1482,13 +1587,29 @@ class ChatViewModel(
                 inference.nativeClearCache(contextPtr)
             }
             repository.clearConversation(conversationId)
+
+            // Detaches whatever binding currently exists and stamps a new one
+            // in a single atomic step, under its own fresh version — so this
+            // always supersedes anything that started before it (an older
+            // bind/send that resumes later sees a higher currentBinding
+            // version and backs off), and a bind/send that started after this
+            // call is free to supersede it in turn.
+            val myVersion = bindVersionCounter.incrementAndGet()
+            var newSnapshot: SessionSnapshot? = null
+            sessionBindMutex.withLock {
+                if (myVersion >= currentBinding.bindVersion) {
+                    val snapshot = sessionManager.newSession()
+                    currentBinding = ConversationBinding(conversationId, snapshot.sessionId, snapshot.generation, myVersion)
+                    newSnapshot = snapshot
+                }
+            }
+
             withContext(Dispatchers.Main) {
                 if (conversationId == activeConversationId) {
                     messages.clear()
                     // The conversation row (and its sessionUuid) is gone — this is a
                     // genuinely new session, not a reset of the old one.
-                    sessionManager.newSession()
-                    publishSession()
+                    if (newSnapshot != null) publishSession()
                 }
                 currentAssistantMessage.value = ""
                 isGenerating.value = false
@@ -1517,6 +1638,13 @@ class ChatViewModel(
     fun retryInterrupted(conversationId: Long, interruptedMessageId: Long) {
         if (isGenerating.value) return
         viewModelScope.launch(Dispatchers.IO) {
+            // Resolve (or re-establish) this conversation's binding before
+            // touching anything — refuses outright if another conversation's
+            // bind already won this race, rather than deleting the
+            // interrupted row and then discovering sendMessageInternal's own
+            // check refuses the resend anyway.
+            val binding = ensureBoundToConversation(conversationId)
+            if (binding.conversationId != conversationId) return@launch
             val interrupted = repository.getMessage(interruptedMessageId)
             if (interrupted == null || interrupted.role != "assistant") return@launch
             // Resolve the user turn immediately preceding this specific interrupted
