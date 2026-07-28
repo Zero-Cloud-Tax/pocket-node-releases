@@ -733,8 +733,16 @@ class ChatViewModelPromptGroundingTest {
             emitConversations()
         }
 
+        override suspend fun updateConversationSession(id: Long, sessionUuid: String, generation: Int) {
+            conversations[id] = conversations[id]?.copy(sessionUuid = sessionUuid, generation = generation) ?: return
+            emitConversations()
+        }
+
         override fun getMessagesForConversation(conversationId: Long): Flow<List<ChatMessage>> =
             messageFlow(conversationId)
+
+        override suspend fun getMessageById(id: Long): ChatMessage? =
+            messages.values.flatten().firstOrNull { it.id == id }
 
         override suspend fun insertMessage(message: ChatMessage): Long {
             val id = message.id.takeIf { it != 0L } ?: nextMessageId++

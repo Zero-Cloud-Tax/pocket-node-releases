@@ -22,6 +22,9 @@ import com.pocketnode.app.data.model.ChatMessage
 import com.pocketnode.app.data.model.KnowledgeChunk
 import com.pocketnode.app.data.model.LocalModel
 import com.pocketnode.app.data.model.ModelRole
+import com.pocketnode.app.session.RequestToken
+import com.pocketnode.app.session.SessionManager
+import com.pocketnode.app.session.SessionSnapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -108,6 +111,15 @@ class ChatViewModel(
     // Raw FD for models opened from content:// URIs via /proc/self/fd; -1 = not in use
     private var rawFd = -1
     private var loadedModelSelection: ResolvedModelSelection? = null
+
+    // Single authoritative source of truth for this conversation's session
+    // identity, context generation, and request/response staleness. See
+    // com.pocketnode.app.session.SessionManager.
+    private val sessionManager = SessionManager()
+    val sessionSnapshot = mutableStateOf(sessionManager.snapshot())
+    private fun publishSession() {
+        sessionSnapshot.value = sessionManager.snapshot()
+    }
 
     val messages = mutableStateListOf<ChatMessage>()
     val currentConversationId = mutableStateOf(defaultConversationId)
@@ -236,6 +248,9 @@ class ChatViewModel(
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
             repository.ensureConversation(conversationId, defaultTitleForConversation(conversationId))
+            val (sessionId, generation) = repository.ensureSessionIdentity(conversationId)
+            sessionManager.restore(sessionId, generation)
+            withContext(Dispatchers.Main) { publishSession() }
             repository.getMessages(conversationId).collectLatest { history ->
                 messages.clear()
                 messages.addAll(history)
@@ -243,6 +258,23 @@ class ChatViewModel(
         }
         syncVisibleGenerationState()
         modelError.value = null
+    }
+
+    /**
+     * Reset context within the current conversation: clears the model's KV
+     * cache and bumps the session generation so any request/response already
+     * in flight is treated as stale, but keeps the same sessionId and chat
+     * history. Idempotent — see SessionManager.resetSession.
+     */
+    fun resetSessionContext(conversationId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (contextPtr != 0L && conversationId == activeConversationId) {
+                inference.nativeClearCache(contextPtr)
+            }
+            val snapshot = sessionManager.resetSession()
+            repository.persistSessionState(conversationId, snapshot.sessionId, snapshot.generation)
+            withContext(Dispatchers.Main) { publishSession() }
+        }
     }
 
     fun loadModel(
@@ -873,6 +905,16 @@ class ChatViewModel(
         app.activeSession = InferenceSession(contextPtr, modelName)
     }
 
+    /** Test-only seam: sendMessageInternal is normally reached only via
+     * sendMessage(), which resets stopRequested before launching. Tests call
+     * sendMessageInternal directly, so this lets them simulate "stop was
+     * requested mid-generation" without needing a real concurrent cancel. */
+    internal fun setStopRequestedForTesting(value: Boolean) {
+        stopRequested = value
+    }
+
+    internal fun sessionSnapshotForTesting() = sessionManager.snapshot()
+
     private fun thermalStatusString(code: Int): String = when (code) {
         0 -> "none"
         1 -> "light"
@@ -988,6 +1030,26 @@ class ChatViewModel(
         lastBatchSize = batchSize
         lastUbatchSize = ubatchSize
 
+        // Resolve this conversation's persisted session identity, detect a
+        // model/backend switch since it was last used, and mint a request
+        // token this send must present before its response may be persisted.
+        // Late responses from a stale generation are discarded, not applied.
+        val (persistedSessionId, persistedGeneration) = repository.ensureSessionIdentity(conversationId)
+        if (sessionManager.currentSessionId() != persistedSessionId) {
+            sessionManager.restore(persistedSessionId, persistedGeneration)
+        }
+        val fingerprintChanged = sessionManager.onModelOrBackendChanged(loadedModelPath, backendName.value)
+        if (fingerprintChanged) {
+            repository.persistSessionState(conversationId, sessionManager.currentSessionId(), sessionManager.currentGeneration())
+            logInfo(
+                "Session: model/backend changed since last use of conversationId=$conversationId — generation now ${sessionManager.currentGeneration()}"
+            )
+        }
+        val requestToken = sessionManager.beginRequest()
+        var assistantMsgId: Long? = null
+        var completedOk = false
+        withContext(Dispatchers.Main) { publishSession() }
+
         try {
             if (clearConversationFirst) {
                 if (contextPtr != 0L && conversationId == activeConversationId) {
@@ -1033,10 +1095,11 @@ class ChatViewModel(
             )
 
             // Save an empty assistant message first to get its ID
-            val assistantMsgId = repository.saveMessage(
+            val placeholderId = repository.saveMessage(
                 ChatMessage(conversationId = conversationId, role = "assistant", content = "")
             )
-            logInfo("Chat generation: assistant placeholder created id=$assistantMsgId")
+            assistantMsgId = placeholderId
+            logInfo("Chat generation: assistant placeholder created id=$placeholderId")
 
             var partialMessage = ""
             var lastUiUpdateTime = 0L
@@ -1044,6 +1107,7 @@ class ChatViewModel(
 
             val callback = object : LlamaCallback {
                 override fun onToken(token: String) {
+                    sessionManager.markStreaming(requestToken)
                     partialMessage += token
                     val sanitized = sanitizeAssistantOutput(partialMessage, finalPass = false)
                     val now = System.currentTimeMillis()
@@ -1057,13 +1121,15 @@ class ChatViewModel(
                         }
                     }
 
-                    // Periodically persist to DB every 2000ms
-                    if (now - lastDbSaveTime > 2000) {
+                    // Periodically persist to DB every 2000ms — skipped once this
+                    // request's generation is no longer current (reset, model/backend
+                    // switch, or a newer send already superseded it).
+                    if (now - lastDbSaveTime > 2000 && sessionManager.isCurrent(requestToken)) {
                         lastDbSaveTime = now
                         viewModelScope.launch(Dispatchers.IO) {
                             repository.updateMessage(
                                 ChatMessage(
-                                    id = assistantMsgId,
+                                    id = placeholderId,
                                     conversationId = conversationId,
                                     role = "assistant",
                                     content = sanitized.visibleText
@@ -1153,18 +1219,31 @@ class ChatViewModel(
             )
             val finalAssistantOutput = sanitizeAssistantOutput(partialMessage, finalPass = true)
 
-            // Final save to DB
-            repository.updateMessage(
-                ChatMessage(
-                    id = assistantMsgId,
-                    conversationId = conversationId,
-                    role = "assistant",
-                    content = finalAssistantOutput.visibleText
+            // Final save to DB — only if generation was requested to stop AND
+            // this request's generation is still current. A stopped generation
+            // or a stale generation (reset / model-switch / superseded by a
+            // newer send while this one was in flight) means the response must
+            // be discarded/flagged interrupted rather than saved as completed —
+            // the finally block below handles that when completedOk is false.
+            completedOk = !stopRequested && sessionManager.markCompleted(requestToken)
+            if (completedOk) {
+                repository.updateMessage(
+                    ChatMessage(
+                        id = placeholderId,
+                        conversationId = conversationId,
+                        role = "assistant",
+                        content = finalAssistantOutput.visibleText
+                    )
                 )
-            )
-            logInfo(
-                "Chat persistence[assistant]: conversationId=$conversationId finalAssistantPreview=\"${preview(finalAssistantOutput.visibleText)}\" savedVisible=true"
-            )
+                logInfo(
+                    "Chat persistence[assistant]: conversationId=$conversationId finalAssistantPreview=\"${preview(finalAssistantOutput.visibleText)}\" savedVisible=true"
+                )
+            } else {
+                logInfo(
+                    "Chat generation: discarding stale response — sessionId=${requestToken.sessionId} requestGeneration=${requestToken.generation} currentGeneration=${sessionManager.currentGeneration()} conversationId=$conversationId"
+                )
+            }
+            withContext(Dispatchers.Main) { publishSession() }
         } catch (e: CancellationException) {
             logInfo(
                 "Chat generation cancelled: stopRequested=$stopRequested conversationId=$conversationId"
@@ -1183,18 +1262,30 @@ class ChatViewModel(
             // via stopGeneration(). Without it, withContext(Dispatchers.Main) would throw
             // CancellationException and generatingConversationId would never be cleared.
             withContext(NonCancellable + Dispatchers.IO) {
-                if (stopRequested) {
-                    val abortedAssistant = repository
-                        .getMessagesSnapshot(conversationId)
-                        .lastOrNull { it.role == "assistant" && it.content.isBlank() }
-                    if (abortedAssistant != null) {
-                        repository.deleteMessage(abortedAssistant.id)
-                        logInfo(
-                            "Stop recovery: removed empty assistant placeholder id=${abortedAssistant.id} conversationId=$conversationId"
-                        )
-                    } else {
-                        logInfo("Stop recovery: no empty assistant placeholder found for conversationId=$conversationId")
+                // Anything that didn't reach a clean completedOk=true save (stopped,
+                // superseded by a stale generation, or an exception) must never be
+                // left looking like a finished assistant turn: delete it if it never
+                // got any content, otherwise flag it interrupted so it reads as a
+                // partial fragment rather than a completed response.
+                if (!completedOk) {
+                    val msgId = assistantMsgId
+                    if (msgId != null) {
+                        val current = repository.getMessage(msgId)
+                        if (current != null) {
+                            if (current.content.isBlank()) {
+                                repository.deleteMessage(current.id)
+                                logInfo(
+                                    "Stop recovery: removed empty assistant placeholder id=$msgId conversationId=$conversationId"
+                                )
+                            } else {
+                                repository.updateMessage(current.copy(interrupted = true))
+                                logInfo(
+                                    "Stop recovery: flagged partial assistant message id=$msgId interrupted=true conversationId=$conversationId"
+                                )
+                            }
+                        }
                     }
+                    sessionManager.markInterrupted(requestToken)
                 }
             }
             withContext(NonCancellable + Dispatchers.Main) {
@@ -1203,6 +1294,7 @@ class ChatViewModel(
                 isGenerating.value = false
                 isStopping.value = false
                 syncVisibleGenerationState()
+                publishSession()
             }
         }
     }
@@ -1282,6 +1374,10 @@ class ChatViewModel(
             withContext(Dispatchers.Main) {
                 if (conversationId == activeConversationId) {
                     messages.clear()
+                    // The conversation row (and its sessionUuid) is gone — this is a
+                    // genuinely new session, not a reset of the old one.
+                    sessionManager.newSession()
+                    publishSession()
                 }
                 currentAssistantMessage.value = ""
                 isGenerating.value = false

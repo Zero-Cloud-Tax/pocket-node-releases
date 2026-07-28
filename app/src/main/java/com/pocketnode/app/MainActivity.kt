@@ -535,7 +535,9 @@ class MainActivity : ComponentActivity() {
                                     attachedChunks = chatVm.attachedChunks,
                                     onRemoveChunk = { id -> chatVm.removeChunk(id) },
                                     onClearChunks = { chatVm.clearAttachedChunks() },
-                                    onNavigateToKnowledge = { navController.navigate("knowledge") }
+                                    onNavigateToKnowledge = { navController.navigate("knowledge") },
+                                    sessionSnapshot = chatVm.sessionSnapshot.value,
+                                    onResetSession = { chatVm.resetSessionContext(conversationId) }
                                 )
                             }
 

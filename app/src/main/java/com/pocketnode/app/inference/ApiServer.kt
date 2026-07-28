@@ -163,7 +163,12 @@ private data class CapabilitiesResponse(
     val supports_web_search: Boolean,
     val busy: Boolean,
     val app_version: String,
-    val build_version_code: Int
+    val build_version_code: Int,
+    // ── Session hardening: additive field ──────────────────────────────────
+    // Changes every time the local daemon (re)starts within this process.
+    // Clients compare this to the value they last observed to detect a
+    // daemon restart and treat any prior in-memory context as gone.
+    val daemon_boot_id: String
 )
 
 @Serializable
@@ -185,7 +190,9 @@ private data class HealthResponse(
     val busy: Boolean,
     val app_version: String,
     val build_version_code: Int,
-    val request_id: String
+    val request_id: String,
+    // ── Session hardening: additive field — see CapabilitiesResponse.daemon_boot_id ──
+    val daemon_boot_id: String
 )
 
 @Serializable
@@ -284,6 +291,10 @@ object ApiServer {
         encodeDefaults = true
     }
     private var serverStartTime = 0L
+    // Regenerated on every start() — lets clients detect a daemon restart
+    // (foreground service recreated, process killed and relaunched, etc.)
+    // even when the app process itself survives across the restart.
+    @Volatile private var bootId: String = UUID.randomUUID().toString()
     private val serverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cachedApiKey = MutableStateFlow("")
     private var keyCollectorJob: Job? = null
@@ -353,6 +364,7 @@ object ApiServer {
     fun start(app: MainApplication, port: Int = 11434) {
         if (isStarted || isStopping) return
 
+        bootId = UUID.randomUUID().toString()
         keyCollectorJob?.cancel()
         keyCollectorJob = serverScope.launch {
             app.settingsDataStore.data
@@ -429,7 +441,8 @@ object ApiServer {
                             supports_web_search      = false,
                             busy                     = inferenceMutex.isLocked,
                             app_version              = com.pocketnode.app.BuildConfig.VERSION_NAME,
-                            build_version_code       = com.pocketnode.app.BuildConfig.VERSION_CODE
+                            build_version_code       = com.pocketnode.app.BuildConfig.VERSION_CODE,
+                            daemon_boot_id           = bootId
                         )),
                         ContentType.Application.Json
                     )
@@ -468,7 +481,8 @@ object ApiServer {
                                 busy              = inferenceMutex.isLocked,
                                 app_version       = com.pocketnode.app.BuildConfig.VERSION_NAME,
                                 build_version_code = com.pocketnode.app.BuildConfig.VERSION_CODE,
-                                request_id        = requestId
+                                request_id        = requestId,
+                                daemon_boot_id    = bootId
                             )
                         ),
                         ContentType.Application.Json
