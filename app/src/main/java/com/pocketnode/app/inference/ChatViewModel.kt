@@ -1091,7 +1091,8 @@ class ChatViewModel(
         ubatchSize: Int = 128,
         benchmarkMode: Boolean = false,
         serviceStateSummary: String? = null,
-        skipUserMessageSave: Boolean = false
+        skipUserMessageSave: Boolean = false,
+        replacingInterruptedMessageId: Long? = null
     ) {
         val priorGenerationJob = generationJob
         generationJob = viewModelScope.launch(Dispatchers.IO) {
@@ -1123,7 +1124,8 @@ class ChatViewModel(
                 ubatchSize = ubatchSize,
                 benchmarkMode = benchmarkMode,
                 serviceStateSummary = serviceStateSummary,
-                skipUserMessageSave = skipUserMessageSave
+                skipUserMessageSave = skipUserMessageSave,
+                replacingInterruptedMessageId = replacingInterruptedMessageId
             )
         }
     }
@@ -1145,7 +1147,8 @@ class ChatViewModel(
         ubatchSize: Int = 128,
         benchmarkMode: Boolean = false,
         serviceStateSummary: String? = null,
-        skipUserMessageSave: Boolean = false
+        skipUserMessageSave: Boolean = false,
+        replacingInterruptedMessageId: Long? = null
     ) {
         val trimmedText = text.trim()
         if (trimmedText.isBlank() || isGenerating.value) return
@@ -1227,6 +1230,14 @@ class ChatViewModel(
                 ?: "Conversation is still switching — please try sending again."
             return
         }
+        // Only now — after this call has minted its own request token under
+        // the current binding version, i.e. the resend is guaranteed to
+        // proceed — is it safe to remove the interrupted fragment it is
+        // replacing. Deleting any earlier (e.g. right after ensureBound-
+        // ToConversation but before beginRequest) would risk losing the
+        // fragment with no replacement if this call lost the binding race
+        // in between and returned early above.
+        replacingInterruptedMessageId?.let { repository.deleteMessage(it) }
         var assistantMsgId: Long? = null
         var completedOk = false
         // Serializes every write to this request's assistant row — the
@@ -1668,12 +1679,18 @@ class ChatViewModel(
             if (interruptedIndex <= 0) return@launch
             val precedingUser = history.subList(0, interruptedIndex).lastOrNull { it.role == "user" }
             if (precedingUser == null) return@launch
-            repository.deleteMessage(interruptedMessageId)
+            // Do NOT delete the interrupted row here. sendMessageInternal only
+            // deletes it once this resend has minted its own request token
+            // under the current binding — i.e. once it is guaranteed to
+            // proceed — so a lost binding race here leaves the fragment
+            // intact with a safe "still switching" error instead of silently
+            // discarding it with no replacement.
             withContext(Dispatchers.Main) {
                 sendMessage(
                     text = precedingUser.content,
                     conversationId = conversationId,
-                    skipUserMessageSave = true
+                    skipUserMessageSave = true,
+                    replacingInterruptedMessageId = interruptedMessageId
                 )
             }
         }
