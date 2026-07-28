@@ -1194,16 +1194,27 @@ class ChatViewModel(
                 ?: "Conversation is still switching — please try sending again."
             return
         }
-        val fingerprintChanged = sessionManager.onModelOrBackendChanged(loadedModelPath, backendName.value)
-        if (fingerprintChanged) {
-            sessionBindMutex.withLock {
-                if (currentBinding.bindVersion == binding.bindVersion) {
+        // The version re-check must happen BEFORE onModelOrBackendChanged runs,
+        // not after: that call itself mutates sessionManager's ambient
+        // fingerprint/generation state unconditionally, so if a newer bind won
+        // this conversation's binding in the meantime, calling it here would
+        // corrupt the NEW binding's session state (and, worse, persist that
+        // corrupted generation against THIS call's conversationId) rather than
+        // simply being skipped like the beginRequest() check below.
+        var toPersistFingerprint: Pair<String, Int>? = null
+        sessionBindMutex.withLock {
+            if (currentBinding.bindVersion == binding.bindVersion) {
+                val fingerprintChanged = sessionManager.onModelOrBackendChanged(loadedModelPath, backendName.value)
+                if (fingerprintChanged) {
                     currentBinding = currentBinding.copy(generation = sessionManager.currentGeneration())
+                    toPersistFingerprint = sessionManager.currentSessionId() to sessionManager.currentGeneration()
                 }
             }
-            repository.persistSessionState(conversationId, sessionManager.currentSessionId(), sessionManager.currentGeneration())
+        }
+        toPersistFingerprint?.let { (sessionId, generation) ->
+            repository.persistSessionState(conversationId, sessionId, generation)
             logInfo(
-                "Session: model/backend changed since last use of conversationId=$conversationId — generation now ${sessionManager.currentGeneration()}"
+                "Session: model/backend changed since last use of conversationId=$conversationId — generation now $generation"
             )
         }
         // Mint the request token only if this call still owns the exact
