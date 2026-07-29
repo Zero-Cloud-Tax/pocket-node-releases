@@ -22,8 +22,14 @@ interface ChatDao {
     @Query("UPDATE conversations SET lastMessageAt = :timestamp WHERE id = :id")
     suspend fun updateConversationTimestamp(id: Long, timestamp: Long)
 
+    @Query("UPDATE conversations SET sessionUuid = :sessionUuid, generation = :generation WHERE id = :id")
+    suspend fun updateConversationSession(id: Long, sessionUuid: String, generation: Int)
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun getMessagesForConversation(conversationId: Long): Flow<List<ChatMessage>>
+
+    @Query("SELECT * FROM messages WHERE id = :id LIMIT 1")
+    suspend fun getMessageById(id: Long): ChatMessage?
 
     @Insert
     suspend fun insertMessage(message: ChatMessage): Long

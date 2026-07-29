@@ -22,7 +22,7 @@ import com.pocketnode.app.data.model.LocalModel
         KnowledgeDocument::class,
         KnowledgeChunk::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -162,6 +162,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Session hardening: adds explicit session identity (sessionUuid, generation)
+        // to conversations and an interrupted-turn marker to messages. Existing rows
+        // get sessionUuid = '' here; ChatRepository.ensureSessionIdentity backfills a
+        // real UUID lazily on first access rather than requiring a SQL-side UUID
+        // generator (SQLite has none built in).
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN sessionUuid TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -172,7 +185,10 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "pocketnode.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                        MIGRATION_6_7
+                    )
                     .build()
                     .also { INSTANCE = it }
             }

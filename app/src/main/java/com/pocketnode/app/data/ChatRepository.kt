@@ -5,6 +5,7 @@ import com.pocketnode.app.data.model.Conversation
 import com.pocketnode.app.inference.PromptTemplate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import java.util.UUID
 
 class ChatRepository(private val chatDao: ChatDao) {
     fun getConversations(): Flow<List<Conversation>> = chatDao.getAllConversations()
@@ -29,11 +30,47 @@ class ChatRepository(private val chatDao: ChatDao) {
         }
     }
 
+    /** Returns (sessionUuid, generation) for [conversationId] — the single
+     * entry point that guarantees a stable session identity regardless of
+     * call order. Creates the conversation row if it doesn't exist yet (a
+     * caller may reach this before any bindConversation/ensureConversation
+     * call), and backfills a fresh UUID for rows migrated from schema
+     * version 6 or earlier whose sessionUuid is still blank. Never
+     * overwrites an already-assigned UUID. */
+    suspend fun ensureSessionIdentity(conversationId: Long): Pair<String, Int> {
+        val conversation = chatDao.getConversationById(conversationId)
+        if (conversation == null) {
+            val newUuid = UUID.randomUUID().toString()
+            chatDao.insertConversation(
+                Conversation(
+                    id = conversationId,
+                    title = "Chat",
+                    modelId = "unknown",
+                    sessionUuid = newUuid,
+                    generation = 0
+                )
+            )
+            return newUuid to 0
+        }
+        if (conversation.sessionUuid.isBlank()) {
+            val newUuid = UUID.randomUUID().toString()
+            chatDao.updateConversationSession(conversationId, newUuid, conversation.generation)
+            return newUuid to conversation.generation
+        }
+        return conversation.sessionUuid to conversation.generation
+    }
+
+    suspend fun persistSessionState(conversationId: Long, sessionUuid: String, generation: Int) =
+        chatDao.updateConversationSession(conversationId, sessionUuid, generation)
+
     fun getMessages(conversationId: Long): Flow<List<ChatMessage>> =
         chatDao.getMessagesForConversation(conversationId)
 
     suspend fun getMessagesSnapshot(conversationId: Long): List<ChatMessage> =
         chatDao.getMessagesForConversation(conversationId).first()
+
+    suspend fun getMessage(messageId: Long): ChatMessage? =
+        chatDao.getMessageById(messageId)
 
     suspend fun saveMessage(message: ChatMessage): Long {
         val id = chatDao.insertMessage(message)

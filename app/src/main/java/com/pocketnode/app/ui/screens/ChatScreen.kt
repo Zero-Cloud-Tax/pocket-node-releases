@@ -45,6 +45,9 @@ import com.pocketnode.app.ui.components.InferenceStatusCard
 import com.pocketnode.app.ui.components.InferenceStatusCardState
 import com.pocketnode.app.ui.components.MarkdownText
 import com.pocketnode.app.ui.components.TypingIndicator
+import com.pocketnode.app.session.ConnectionStatus
+import com.pocketnode.app.session.SessionSnapshot
+import com.pocketnode.app.session.SessionState
 import kotlinx.coroutines.launch
 
 @Composable
@@ -82,7 +85,11 @@ fun ChatScreen(
     attachedChunks: List<KnowledgeChunk> = emptyList(),
     onRemoveChunk: (Long) -> Unit = {},
     onClearChunks: () -> Unit = {},
-    onNavigateToKnowledge: (() -> Unit)? = null
+    onNavigateToKnowledge: (() -> Unit)? = null,
+    sessionSnapshot: SessionSnapshot? = null,
+    onResetSession: (() -> Unit)? = null,
+    onRetryInterrupted: ((Long) -> Unit)? = null,
+    onDismissInterrupted: ((Long) -> Unit)? = null
 ) {
     var inputText by rememberSaveable { mutableStateOf("") }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
@@ -236,7 +243,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClearChat) {
-                    Icon(Icons.Default.Delete, contentDescription = "Clear Chat",
+                    Icon(Icons.Default.Delete, contentDescription = "New chat (deletes this conversation's history)",
                         tint = MaterialTheme.colorScheme.error)
                 }
 
@@ -257,7 +264,18 @@ fun ChatScreen(
                     }
                 }
 
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // ── Session status chip ──
+                    // Diagnostic only, no prompt/response content. Placed in the
+                    // header row (never in bottomBar) so it can never displace or
+                    // cover ChatInputBar — see the layout invariant documented above.
+                    if (sessionSnapshot != null && onResetSession != null) {
+                        SessionStatusChip(
+                            snapshot = sessionSnapshot,
+                            onResetSession = onResetSession,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                    }
                     if (onNavigateToKnowledge != null) {
                         IconButton(onClick = onNavigateToKnowledge) {
                             Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Knowledge",
@@ -379,7 +397,16 @@ fun ChatScreen(
                 }
 
                 items(displayMessages, key = { it.id }) { message ->
-                    ChatBubble(message)
+                    if (message.role == "assistant" && message.interrupted) {
+                        ChatBubble(
+                            message = message,
+                            onRetry = onRetryInterrupted?.let { retry -> { retry(message.id) } },
+                            onDismiss = onDismissInterrupted?.let { dismiss -> { dismiss(message.id) } },
+                            retryEnabled = !isGenerating
+                        )
+                    } else {
+                        ChatBubble(message)
+                    }
                 }
                 if (isGenerating && currentAssistantMessage.isNotEmpty()) {
                     item {
@@ -822,6 +849,47 @@ private fun EmptyChatState(onSuggestionClick: (String) -> Unit, modifier: Modifi
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 3.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Compact, non-intrusive session diagnostic — short session id, and lifecycle
+ * state when it's not the unremarkable steady state. Never shows prompt or
+ * response text. Tap to reveal recovery actions; a stale/reset-required state
+ * must never be silently swallowed, so its label always differs visibly from
+ * the normal "Session xxxxxxxx" label.
+ */
+@Composable
+private fun SessionStatusChip(
+    snapshot: SessionSnapshot,
+    onResetSession: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val shortId = snapshot.sessionId.take(8)
+    val (label, color) = when {
+        snapshot.connectionStatus == ConnectionStatus.RECONNECTING -> "Reconnecting…" to MaterialTheme.colorScheme.tertiary
+        snapshot.state == SessionState.RESET_REQUIRED -> "Reset required — daemon restarted" to MaterialTheme.colorScheme.error
+        snapshot.state == SessionState.STALE -> "Session stale" to MaterialTheme.colorScheme.error
+        snapshot.state == SessionState.INTERRUPTED -> "Interrupted" to MaterialTheme.colorScheme.tertiary
+        snapshot.state == SessionState.SENDING || snapshot.state == SessionState.STREAMING -> "Session $shortId · active" to MaterialTheme.colorScheme.primary
+        else -> "Session $shortId" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Box(modifier = modifier) {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+            colors = AssistChipDefaults.assistChipColors(labelColor = color)
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Reset context (keeps history)") },
+                onClick = {
+                    expanded = false
+                    onResetSession()
+                }
             )
         }
     }
